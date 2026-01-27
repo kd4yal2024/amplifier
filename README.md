@@ -24,7 +24,6 @@ This repo is aimed at being **deployable like an appliance**:
 
 > This is the intended structure. If your tree differs slightly, align to this so docs/scripts don’t go stale.
 
-```text
 pi@amp:~/github/amplifier
 ├── Cargo.lock
 ├── Cargo.toml
