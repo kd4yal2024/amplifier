@@ -4,6 +4,7 @@
 A Raspberry Pi–based controller for an HF amplifier/tuner project, with a local web UI and hardware I/O via GPIO and (optionally) I²C expanders.
 
 This repo is aimed at being **deployable like an appliance**:
+
 - predictable layout
 - minimal hard-coded paths
 - easy install / run / recover
@@ -24,6 +25,7 @@ This repo is aimed at being **deployable like an appliance**:
 
 > This is the intended structure. If your tree differs slightly, align to this so docs/scripts don’t go stale.
 
+```text
 pi@amp:~/github/amplifier
 ├── Cargo.lock
 ├── Cargo.toml
@@ -42,10 +44,11 @@ pi@amp:~/github/amplifier
 │   ├── test_sse.css
 │   └── ui-polish.css
 ├── templates
-    ├── amplifier2.html
-    ├── amplifier2_old.html
-    ├── config2.html
-    └── test_sse.html
+│   ├── amplifier2.html
+│   ├── amplifier2_old.html
+│   ├── config2.html
+│   └── test_sse.html
+````
 
 ---
 
@@ -75,8 +78,7 @@ By default, the server should start and serve the web UI (if `static/` is found)
 
 ## Configuration (no hard-coded paths)
 
-Hard-coding absolute filesystem paths is a deployment booby trap.
-Use environment variables (or a config file) instead.
+Hard-coding absolute filesystem paths is a deployment booby trap. Use environment variables (or a config file) instead.
 
 Suggested env vars:
 
@@ -160,6 +162,8 @@ cargo clippy
 cargo test
 ```
 
+---
+
 ## Troubleshooting
 
 * **Web UI not loading / missing assets**
@@ -178,11 +182,13 @@ More in: `docs/troubleshooting.md`
 
 ## Roadmap (near-term)
 
-
+*TBD*
 
 ---
 
 ## License
 
-TBD 
+TBD
 
+```
+```
