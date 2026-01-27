@@ -1,7 +1,7 @@
 ````text
-# HF Amp Automation (Raspberry Pi Controller + Web UI)
+## HF Amp Automation (Raspberry Pi Controller + Web UI)
 
-A Raspberry Pi–based controller for an HF amplifier/tuner project, with a local web UI and hardware I/O via GPIO and (optionally) I²C expanders.
+### A Raspberry Pi–based controller for an HF amplifier/tuner project, with a local web UI and hardware I/O via GPIO and (optionally) I²C expanders.
 
 This repo is aimed at being **deployable like an appliance**:
 
