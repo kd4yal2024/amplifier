@@ -25,36 +25,28 @@ This repo is aimed at being **deployable like an appliance**:
 > This is the intended structure. If your tree differs slightly, align to this so docs/scripts don’t go stale.
 
 ```text
-.
-├── Cargo.toml
+pi@amp:~/github/amplifier
 ├── Cargo.lock
+├── Cargo.toml
 ├── README.md
-├── src/
-│   ├── main.rs                # binary entry point (server bootstrap)
-│   ├── lib.rs                 # hardware + domain modules
-│   └── ...                    # additional Rust modules
-├── static/                    # web UI (served as static assets)
-│   ├── index.html
-│   ├── css/
-│   ├── js/
-│   └── img/
-├── templates/                 # optional (only if you render server-side pages)
-├── config/
-│   ├── example.env            # sample env vars (copy to .env or service env)
-│   └── example.yaml|json      # optional structured config
-├── systemd/
-│   └── amplifier.service      # systemd unit file (template)
-├── scripts/
-│   ├── install.sh             # install deps + service setup
-│   ├── update.sh              # pull/build/restart helper
-│   └── dev.sh                 # developer convenience wrapper
-├── docs/
-│   ├── wiring/                # diagrams, pinouts, photos
-│   ├── hardware-notes.md      # encoder/stepper/I²C notes
-│   └── troubleshooting.md
-└── tests/
-    └── ...                    # (optional) integration/unit tests
-````
+├── src
+│   ├── lib.rs
+│   └── main.rs
+├── static
+│   ├── amplifier3.js
+│   ├── amplifier.css
+│   ├── amplifier.json
+│   ├── main-polish.css
+│   ├── skin.css
+│   ├── test.json
+│   ├── test123.json
+│   ├── test_sse.css
+│   └── ui-polish.css
+├── templates
+    ├── amplifier2.html
+    ├── amplifier2_old.html
+    ├── config2.html
+    └── test_sse.html
 
 ---
 
@@ -78,7 +70,7 @@ cargo build
 cargo run
 ```
 
-By default the server should start and serve the web UI (if `static/` is found).
+By default, the server should start and serve the web UI (if `static/` is found).
 
 ---
 
