@@ -247,21 +247,55 @@ pub mod stepper {
     }
 }
 pub mod mcp {
-    use std::collections::HashMap;
-    use linux_embedded_hal::I2cdev;
+    use std::{collections::HashMap, error::Error};
+    use async_std::io;
+    //use linux_embedded_hal::I2cdev;
     use mcp230xx::{Direction, Mcp230xx, Mcp23017, Level};
+    use rppal::{self, {i2c::I2c}};
+    use std::sync::{Arc, Mutex};
+    use embedded_devices::devices::texas_instruments::ina228::{INA228Sync, address::Address, address::Pin};
+    use embedded_devices::sensor::OneshotSensorSync;
+    use linux_embedded_hal::i2cdev::core::I2CDevice;
+    use uom::si::electric_current::{ampere, milliampere};
+    use uom::si::electric_potential::millivolt;
+    use uom::si::electrical_resistance::ohm;
+    use uom::si::power::milliwatt;
+    use uom::si::f64::{ElectricCurrent, ElectricalResistance};
+    use uom::si::thermodynamic_temperature::{self, degree_celsius};
+    use embedded_hal::delay::DelayNs;
+    use std::time::Duration;  
+    use embedded_interfaces::i2c::I2cDeviceSync;
+    use embedded_hal_bus::i2c::MutexDevice;
+    use embedded_hal_compat::ReverseCompat; 
+      #[derive(Clone, Copy, Debug, Default)]
+    pub struct StdDelay;
 
+    impl DelayNs for StdDelay {
+        fn delay_ns(&mut self, ns: u32) {
+            // Good enough for device init delays on Linux
+            std::thread::sleep(Duration::from_nanos(ns as u64));
+        }
+
+        fn delay_us(&mut self, us: u32) {
+            std::thread::sleep(Duration::from_micros(us as u64));
+        }
+
+        fn delay_ms(&mut self, ms: u32) {
+            std::thread::sleep(Duration::from_millis(ms as u64));
+        }
+    } 
+    #[derive(Clone)] 
     pub struct Mcp {
+        pub all_pins: [Mcp23017; 16],
         pub pins: HashMap<String, Mcp23017>,
-        pub mcp: Mcp230xx<I2cdev, Mcp23017>,
+        pub bus: Arc<Mutex<I2c>>,
         pub message: String,
         pub switch: HashMap<String, String>
     }
     impl Mcp {
         // default function that sets all pins as output.
         pub fn new() -> Self {
-            let i2c= I2cdev::new("/dev/i2c-1").unwrap();
-            let mut mcp: Mcp230xx<_, Mcp23017> = Mcp230xx::new(i2c, 0x20).unwrap();
+            //let i2c= I2cdev::new("/dev/i2c-1").unwrap();
             let all_pins = [
                 Mcp23017::A0, Mcp23017::A1, Mcp23017::A2,
                 Mcp23017::A3, Mcp23017::A4, Mcp23017::A5,
@@ -270,15 +304,10 @@ pub mod mcp {
                 Mcp23017::B4, Mcp23017::B5, Mcp23017::B6,
                 Mcp23017::B7,
             ];
-            for i in 0..=15 {
-                let pin = Mcp23017::try_from(i).unwrap();
-                println!("{:?}", pin);
-                if let Ok(_) = mcp.set_direction(pin, Direction::Output){
-                    println!("Pin: {:?} Configured as output", pin);
-                }
-                mcp.set_gpio(all_pins[i], Level::Low);
-            }
+           
             Self {
+                all_pins,
+                bus: Arc::new(Mutex::new(I2c::new().unwrap())),
                 pins: HashMap::from([
                     ("A0".to_string(), Mcp23017::A0),
                     ("A1".to_string(), Mcp23017::A1),
@@ -297,12 +326,49 @@ pub mod mcp {
                     ("B6".to_string(), Mcp23017::B6),
                     ("B7".to_string(), Mcp23017::B7),
                 ]),
-                mcp: mcp,
                 message: String::from("MCP Intioalized ! ! !"),
                 switch: HashMap::new(),
                 }
                 
         }
+        pub fn init(&mut self){
+            let i2c_mcp = MutexDevice::new(&self.bus).reverse();
+            let mut mcp: Mcp230xx<_, Mcp23017> = Mcp230xx::new(i2c_mcp, 0x20).unwrap();
+             for i in 0..=15 {
+                let pin = Mcp23017::try_from(i).unwrap();
+                println!("{:?}", pin);
+                if let Ok(_) = mcp.set_direction(pin, Direction::Output){
+                    println!("Pin: {:?} Configured as output", pin);
+                }
+                mcp.set_gpio(self.all_pins[i], Level::Low);
+            }
+        }
+        pub fn read_pin(&mut self, pin: Mcp23017)-> Result<Level, rppal::i2c::Error> {
+            let i2c_mcp = MutexDevice::new(&self.bus).reverse();
+            let mut mcp: Mcp230xx<_, Mcp23017> = Mcp230xx::new(i2c_mcp, 0x20).unwrap();
+            Ok(mcp.gpio(pin)?)
+        }
+        pub fn set_pin(&mut self, pin: Mcp23017, val: Level)-> Result<(), rppal::i2c::Error>{
+            let i2c_mcp = MutexDevice::new(&self.bus).reverse();
+            let mut mcp: Mcp230xx<_, Mcp23017> = Mcp230xx::new(i2c_mcp, 0x20).unwrap();
+            mcp.set_gpio(pin, val)?;
+            Ok(())
+
+        }
+        pub fn read_val(self) -> Result<(f64, f64), Box<dyn Error>>{
+            let i2c_ina = MutexDevice::new(&self.bus);
+            let delay = StdDelay::default();
+            let mut ina: INA228Sync<StdDelay, I2cDeviceSync<MutexDevice<'_, _>, u8>> = INA228Sync::new_i2c(delay, i2c_ina, Address::A0A1(Pin::Gnd, Pin::Gnd));
+            ina.init(ElectricalResistance::new::<ohm>(0.015),
+                        ElectricCurrent::new::<ampere>(3.0),
+                        ).unwrap_or(());
+            let val = ina.measure()?;
+            let temp = val.temperature.get::<degree_celsius>();
+            let current = val.current.get::<milliampere>();
+            Ok((temp, current))
+            
+        }
     }
 }
-
+    
+ 

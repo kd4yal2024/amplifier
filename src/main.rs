@@ -4,10 +4,12 @@ use amplifier::mcp::{self, Mcp};
 use askama::Template;
 use axum::extract::multipart::MultipartError;
 use axum::response::sse::KeepAlive;
+use embedded_devices::sensor::OneshotSensorSync;
 use futures::TryFutureExt;
 use mcp230xx::Mcp23017;
 use mcp230xx;
 use std::env;
+use uom::si::electric_current::{ampere, milliampere};
 use rppal::gpio::{Gpio, Level, Mode, OutputPin};
 use axum::response::{Html, IntoResponse, Redirect};
 use axum::{
@@ -74,6 +76,7 @@ struct SseData {
     screen_a: u32,
     grid_a: u32,
     pwr_btns: HashMap<String, [String; 2]>,
+    temperature: f64,
     call_sign: String,
     time: String,
     status: String,
@@ -106,6 +109,7 @@ impl SseData {
                 ("HV".to_string(), ["OFF".to_string(), "OFF".to_string()]),
                 ("Oper".to_string(), ["OFF".to_string(), "OFF".to_string()]),
             ]),
+            temperature: 0.0,
             time: String::new(),
             call_sign: String::from("-----"),
             status: "Hello ALL BAND AMP".to_string(),
@@ -151,6 +155,8 @@ struct AppState {
     sleep: bool,
     enable_pin: Arc<Mutex<OutputPin>>,
     pwr_btns: PwrBtns,
+    pwr_btns_state: HashMap<String, [String;2]>,
+    temperature: f64,
     gpio_pins: Vec<u8>,
     call_sign: String,
     status: String,
@@ -183,7 +189,7 @@ struct PwrBtns {
     Fil: [Mcp23017; 2],
     HV: [Mcp23017; 2],
     Oper: [Mcp23017; 1],
-    mcp: Arc<Mutex<Mcp>>,
+    mcp: Mcp,
 }
 impl PwrBtns {
     fn new() -> Self {
@@ -193,16 +199,16 @@ impl PwrBtns {
             Fil: [*mcp.pins.get("A1").unwrap(), *mcp.pins.get("A2").unwrap()],
             HV: [*mcp.pins.get("A3").unwrap(), *mcp.pins.get("A4").unwrap()],
             Oper: [*mcp.pins.get("A5").unwrap()],
-            mcp: Arc::new(Mutex::new(mcp)),
+            mcp: {let mut output  = Mcp::new();
+                output.init();
+                output}
+
         }
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), std::io::Error> {
-    // let (event_sender, _receiver) = broadcast::channel(16); // Channel for events
-    //let mut my_test = Encoder::new();
-    //my_test.run();
     let (tx, _rx) = broadcast::channel(1024);
     let app_state = Arc::new(Mutex::new(AppState {
         tune: Arc::new(Mutex::new(Stepper::new("tune"))),
@@ -213,9 +219,9 @@ async fn main() -> Result<(), std::io::Error> {
         band: Bands::M10,
         gauges: Gauges {
             plate_v: 3000, //temporary for show
-            plate_a: 0,
-            screen_a: 0,
-            grid_a: 0,
+            plate_a: 1,
+            screen_a: 50,
+            grid_a: 10,
         },
         file_list: HashMap::from([("file_name".to_string(), None)]),
         file: String::from("amplifier.json"),
@@ -228,6 +234,13 @@ async fn main() -> Result<(), std::io::Error> {
             Arc::new(Mutex::new(pin))
         },
         pwr_btns : PwrBtns::new(),
+        pwr_btns_state: HashMap::from([
+                ("Blwr".to_string(), ["OFF".to_string(), "OFF".to_string()]),
+                ("Fil".to_string(), ["OFF".to_string(), "OFF".to_string()]),
+                ("HV".to_string(), ["OFF".to_string(), "OFF".to_string()]),
+                ("Oper".to_string(), ["OFF".to_string(), "OFF".to_string()]),
+            ]),
+        temperature: 0.0,
         gpio_pins: vec![17, 27, 22, 5, 6, 13, 19,
                         26,14, 15, 18, 23, 24, 25,
                         12, 20, 21],
@@ -239,6 +252,7 @@ async fn main() -> Result<(), std::io::Error> {
     // looking for config files in directory
 
     tokio::spawn(aquire_data(app_state.clone()));
+    tokio::spawn(aquire_i2c_data(app_state.clone()));
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
@@ -286,14 +300,7 @@ async fn config_post(
     State(state): State<Arc<Mutex<AppState>>>,
     mut form: Multipart,
 ) -> impl IntoResponse {
-    let mut form_data: HashMap<String, String> = HashMap::new();
-    println!("Config PostForm Handler");
-    while let Some(val) = form.next_field().await.unwrap() {
-        println!("Name: {:?}", val.name().unwrap().to_string());
-        let k = val.name().unwrap().to_string();
-        let v = val.text().await.unwrap().to_string();
-        form_data.insert(k.to_string(), v.clone());
-    }
+    let mut form_data = process_form(form).await;
     let mut state = state.lock().unwrap();
     println!("FormData: {:?}", form_data);
     if let Some(_) = state.enc  {
@@ -663,13 +670,7 @@ async fn load(State(state): State<Arc<Mutex<AppState>>>, mut form: Multipart) ->
     impl IntoResponse {
     let mut form_data: HashMap<String, String> = HashMap::new();
     println!("Config PostForm Handler");
-    while let Some(val) = form.next_field().await.unwrap() {
-        println!("Name: {:?}", val.name().unwrap().to_string());
-        let k = val.name().unwrap().to_string();
-        let v = val.text().await.unwrap().to_string();
-        println!("Key: {}, Value: {}", k, v);
-        form_data.insert(k.clone(), v.clone());
-    }
+    let mut form_data = process_form(form).await;
     if form_data.contains_key("files") && form_data.contains_key("load") {
         let file_name = form_data.get("files").unwrap();
         println!("Filename: {}", file_name);
@@ -748,16 +749,7 @@ async fn load(State(state): State<Arc<Mutex<AppState>>>, mut form: Multipart) ->
 }
 //power button handler.
 async fn pwr_btn_handler(State(state): State<Arc<Mutex<AppState>>>, mut form: Multipart) {
-    let mut form_data: HashMap<String, String> = HashMap::new();
-    println!("Config PostForm Handler");
-    while let Some(val) = form.next_field().await.unwrap() {
-        println!("Name: {:?}", val.name().unwrap().to_string());
-        let k = val.name().unwrap().to_string();
-        let v = val.text().await.unwrap().to_string();
-        println!("Key: {}, Value: {}", k, v);
-        form_data.insert(k.clone(), v.clone());
-    }
-    println!("Pwr Button form data {:?}", form_data);
+    let mut form_data = process_form(form).await;
     if form_data.contains_key("ID") {
         let sw = form_data.get("ID").unwrap();
         println!("Switch: {}", sw);
@@ -767,7 +759,7 @@ async fn pwr_btn_handler(State(state): State<Arc<Mutex<AppState>>>, mut form: Mu
             "Blwr" => {
                 let mut state_lck = state.lock().unwrap();
                 let pin = state_lck.pwr_btns.Blwr[0];
-                let _ = state_lck.pwr_btns.mcp.lock().unwrap().mcp.set_gpio(pin, if action == "ON" {mcp230xx::Level::High} else {mcp230xx::Level::Low});
+                let _ = state_lck.pwr_btns.mcp.set_pin(pin, if action == "ON" {mcp230xx::Level::High} else {mcp230xx::Level::Low}).unwrap_or(());
                 state_lck.status = format!("{}", if action == "ON" {"Blower ON"} else {"Blower OFF"});
 
             }
@@ -781,7 +773,7 @@ async fn pwr_btn_handler(State(state): State<Arc<Mutex<AppState>>>, mut form: Mu
             "Oper" => {
                 let mut state_lck = state.lock().unwrap();
                 let pin = state_lck.pwr_btns.Oper[0];
-                let _ = state_lck.pwr_btns.mcp.lock().unwrap().mcp.set_gpio(pin, if action == "ON" {mcp230xx::Level::High} else {mcp230xx::Level::Low});
+                let _ = state_lck.pwr_btns.mcp.set_pin(pin, if action == "ON" {mcp230xx::Level::High} else {mcp230xx::Level::Low});
                 state_lck.status = format!("{}", if action == "ON" {"Operate"} else {"Standby"});
 
             }
@@ -800,11 +792,11 @@ where
         let my_btns = callback(state_lck);
         let pin1 = my_btns[0];
         let pin2 = my_btns[1];
-        let pin1_status = state_lck.pwr_btns.mcp.lock().unwrap().mcp.gpio(pin1).unwrap();
-        let _ = state_lck.pwr_btns.mcp.lock().unwrap().mcp.set_gpio(pin1, if action == "ON" {mcp230xx::Level::High} else {mcp230xx::Level::Low});  
+        let pin1_status = state_lck.pwr_btns.mcp.read_pin(pin1).unwrap();
+        let _ = state_lck.pwr_btns.mcp.set_pin(pin1, if action == "ON" {mcp230xx::Level::High} else {mcp230xx::Level::Low});  
         if form_data.contains_key("delay") {
             let delay = form_data.get("delay").unwrap();
-            let _ = state_lck.pwr_btns.mcp.lock().unwrap().mcp.set_gpio(pin2, if delay == "ON"  && pin1_status == mcp230xx::Level::High {mcp230xx::Level::High} else {mcp230xx::Level::Low});
+            let _ = state_lck.pwr_btns.mcp.set_pin(pin2, if delay == "ON"  && pin1_status == mcp230xx::Level::High {mcp230xx::Level::High} else {mcp230xx::Level::Low});
             state_lck.status = format!("{}", if action == "ON" && delay == "OFF" {
                 format!("{} Step Start !!!",  name)
             } else if pin1_status == mcp230xx::Level::High && delay == "ON" {
@@ -821,9 +813,10 @@ async fn aquire_data(state: Arc<Mutex<AppState>>) {
     println!("Aquire data");
     loop {
         interval.tick().await;
+        
         let date_time = chrono::offset::Local::now().format("%m-%d-%Y, %H:%M:%S").to_string();
         let call_sign = state.lock().unwrap().call_sign.clone();
-        let val = state.lock().unwrap().clone();
+        let mut val = state.lock().unwrap().clone();
         let tune = val.tune.lock().unwrap().clone();
         let ind = val.ind.lock().unwrap().clone();
         let load = val.load.lock().unwrap().clone();
@@ -895,38 +888,64 @@ async fn aquire_data(state: Arc<Mutex<AppState>>) {
         for (key, val) in temp_bands {
             sse_output.ratio.entry(key).insert_entry(val);
         }
-        sse_output.pwr_btns.entry("Blwr".to_string()).and_modify(|x|
-            x[0] = { 
-                match  val.pwr_btns.mcp.lock().unwrap().mcp.gpio(val.pwr_btns.Blwr[0]).unwrap() {
-                    mcp230xx::Level::High => "ON".to_string(),
-                    mcp230xx::Level::Low => "OFF".to_string(),
-                }
-            });
-        sse_output.pwr_btns.entry("Fil".to_string()).and_modify(|x|
-            for i in 0..2 
-            { x[i]= { 
-                    match  val.pwr_btns.mcp.lock().unwrap().mcp.gpio(val.pwr_btns.Fil[i]).unwrap(){
-                        mcp230xx::Level::High => "ON".to_string(),
-                        mcp230xx::Level::Low => "OFF".to_string(),
-                    }
-                }});
-        sse_output.pwr_btns.entry("HV".to_string()).and_modify(|x|
-            for i in 0..2 
-            { x[i]= { 
-                    match  val.pwr_btns.mcp.lock().unwrap().mcp.gpio(val.pwr_btns.HV[i]).unwrap(){
-                        mcp230xx::Level::High => "ON".to_string(),
-                        mcp230xx::Level::Low => "OFF".to_string(),
-                    }
-                }});
-        
+        sse_output.pwr_btns = val.pwr_btns_state;
         sse_output.plate_v = val.gauges.plate_v;
         sse_output.plate_a = val.gauges.plate_a;
         sse_output.screen_a = val.gauges.screen_a;
         sse_output.grid_a = val.gauges.grid_a;
+        sse_output.temperature = val.temperature;
         sse_output.status = val.status.clone();
         let _ = val.sender.send(serde_json::to_string(&sse_output).unwrap());    
     }
 }
+
+async fn aquire_i2c_data(state: Arc<Mutex<AppState>>) {
+    let mut interval = interval(Duration::from_millis(100));
+    let mut temp_data: HashMap<String, [String;2]> = HashMap::new();
+    loop {
+        interval.tick().await;
+        let mut val = state.lock().unwrap().pwr_btns.clone();
+        let btn_arr = [val.Blwr[0], val.Fil[0], val.Fil[1], val.HV[0], val.HV[1]];
+        let levels = [mcp230xx::Level::Low, mcp230xx::Level::Low];
+        btn_arr.iter().enumerate().for_each(|btn|{
+            if let Ok(val) = val.mcp.read_pin(*btn.1) {
+                match btn.0 {
+                    0 => {
+                        temp_data.insert("Blwr".to_string(), [
+                        if val == mcp230xx::Level::High {"ON".to_string()} else {"OFF".to_string()},
+                        "OFF".to_string()]);
+                    },
+                    1 | 2 => {
+                        temp_data.insert("Fil".to_string(), [
+                        if val == mcp230xx::Level::High {"ON".to_string()} else {"OFF".to_string()},
+                        if val == mcp230xx::Level::High {"ON".to_string()} else {"OFF".to_string()}]);
+                    }
+                    3 | 4 => {
+                        temp_data.insert("HV".to_string(), [
+                        if val == mcp230xx::Level::High {"ON".to_string()} else {"OFF".to_string()},
+                        if val == mcp230xx::Level::High {"ON".to_string()} else {"OFF".to_string()}]);
+                    
+                    }
+                    _ => println!("Match statement error with MCP Pins")
+
+                }
+                    
+            } 
+        });
+        let mut temp = state.lock().unwrap().temperature;
+        let mut screen_ma = state.lock().unwrap().gauges.screen_a;
+        if let Ok(t)=  val.mcp.read_val() {
+            screen_ma = t.1 as u32;
+            temp = t.0;
+        } 
+        let mut state_lck = state.lock().unwrap();
+        state_lck.pwr_btns_state = temp_data.clone();
+        state_lck.temperature = temp;
+        state_lck.gauges.screen_a = screen_ma;
+    }
+        
+}
+
 
 fn handle_stepper<F> (state: &mut AppState, form_data: HashMap<String, String>, name: &str, add: bool, process: F)
 where
@@ -1107,4 +1126,18 @@ async fn read_html_from_file<P: AsRef<path::Path>>(path: P) -> Result<String, st
     let mut contents = String::new();
     file.read_to_string(&mut contents).await?;
     Ok(contents)
+}
+//processes all Multi-part form data for all post request handlers.
+async fn process_form(mut form: Multipart) -> HashMap<String, String> {
+    let mut form_data: HashMap<String, String> = HashMap::new();
+    println!("Config PostForm Handler");
+    while let Some(val) = form.next_field().await.unwrap() {
+        println!("Name: {:?}", val.name().unwrap().to_string());
+        let k = val.name().unwrap().to_string();
+        let v = val.text().await.unwrap().to_string();
+        println!("Key: {}, Value: {}", k, v);
+        form_data.insert(k.clone(), v.clone());
+    }
+    println!("Pwr Button form data {:?}", form_data);
+    form_data
 }

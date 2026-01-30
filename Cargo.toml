@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 rotary-encoder-embedded = "0.5.0"
-rppal = "0.22.1"
+rppal = { version = "0.22.1", features= ["hal"] }
 askama = "0.15.1"
 async-std = "1.13.2"
 axum = {version = "0.8.8", features = ["multipart"]}
@@ -27,8 +27,16 @@ linux-embedded-hal = "0.3.2"
 mcp230xx = "1.0.2"
 async-stream = "0.3.6"
 chrono = "0.4.43"
+embedded-devices = { version = "0.10.3", features = ["texas_instruments-ina228", "trace-communication"] }
+uom = "0.37.0"
+embedded-hal = "1"
+embedded-interfaces = "0.10.3"
+embedded-hal-bus = { version = "0.3", features = ["std"] }
+embedded-hal-compat = "0.13"
+
 
 [dev-dependencies]
 eventsource-stream = "0.2"
 reqwest = { version = "0.12", features = ["stream"] }
 reqwest-eventsource = "0.6"
+

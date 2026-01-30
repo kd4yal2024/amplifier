@@ -1,0 +1,219 @@
+<html>
+<head>
+<link rel="stylesheet" href="/static/amplifier.css">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+
+<br><br>
+<p>PIN 16 Reserved as Enable pin.</p>
+{% if enc == false %}
+<form action="/config" method="post" enctype="multipart/form-data">
+<label for="PinA">Pin A: </label>
+  <select name="PinA" id="PinA">
+    <option value=""></option>
+        {% for pin in pins %}
+    <option value="{{pin}}">{{pin}}</option>
+    {% endfor %}
+  </select>
+<br>
+<label for="PinB">Pin B: </label>
+  <select name="PinB" id="PinB">
+    <option value=""></option>
+        {% for pin in pins %}
+    <option value="{{pin}}">{{pin}}</option>
+    {% endfor %}
+  </select><br>
+
+<input name="add_enc" type="submit" value="Add Enc" />
+</form>
+{% else %}
+<form id="stepper_button_form" action="#" method="post" enctype="multipart/form-data">
+<label for="PinA">Pin A: </label>
+  <select name="PinA" id="PinA">
+    <option value=""></option>
+        {% for pin in pins %}
+    <option value="{{pin}}">{{pin}}</option>
+    {% endfor %}
+  </select><br>
+<label for="PinB">Pin B: </label>
+  <select name="PinB" id="PinB">
+    <option value=""></option>
+        {% for pin in pins %}
+    <option value="{{pin}}">{{pin}}</option>
+    {% endfor %}
+  </select><br>
+<label for="ratio">Choose Ratio: </label>
+  <select name="ratio" id="ratio">
+    <option value=""></option>
+    <option value="1">1</option>
+    <option value="2">2</option>
+    <option value="3">3</option>
+    <option value="4">4</option>
+    <option value="5">5</option>
+    <option value="6">6</option>
+    <option value="7">7</option>
+    <option value="8">8</option>
+    <option value="9">9</option>
+    <option value="10">10</option>
+  </select><br>
+</form>
+<button id="add_tune" name="add_tune" class="button" type="submit" value="Add Tune" >Add Tune</button>
+<button id="add_ind" name="add_ind" class="button" type="submit" value="Add Ind">Add Ind</button>
+<button id="add_load" name="add_load" class="button" type="submit" value="Add ">Add Load</button>
+<br><br>
+{% endif %}
+<table>
+  <tr>
+    <th>Field</th>
+    <th>Enc</th>
+    <th>Tune</th>
+    <th>Inductor</th>
+    <th>Load</th>
+  </tr>
+  <tr>
+    <td>Pin 1</td>
+    <td class="pinA"></td>
+    <td class="pinA"></td>
+    <td class="pinA"></td>
+    <td class="pinA"></td>
+  </tr>
+      <tr>
+    <td>Pin 2</td>
+    <td class="pinB"></td>
+    <td class="pinB"></td>
+    <td class="pinB"></td>
+    <td class="pinB"></td>
+  </tr>
+  <tr>
+    <td>Ratio</td>
+    <td></td>
+    <td class="ratio"></td>
+    <td class="ratio"></td>
+    <td class="ratio"></td>
+  </tr>
+  <tr>
+      <td>Func</td>
+      <td>
+      {% if enc_val[0] != "None" && enc_val[1] != "None" %} <form action="#" method="post" enctype="multipart/form-data">
+        <input name="del_enc" type="submit" value="Del" />
+        </form>
+        {% endif %}
+      </td>
+      <td>
+      {% if tune[0] != "None" && tune[1] != "None" %}  <form action="#" method="post" enctype="multipart/form-data">
+        <input name="del_tune" type="submit" value="Del" />
+        </form>
+        <button class="set_range" name="tune_start" id="tune_start_btn" value="zero">Set Start</button><br>
+        <button class="set_range" name="tune_max" id="tune_max_btn" value="max">Set Max</button><br>
+        <button class="set_range" name="tune_reset" id="tune_max_btn" value="reset">Reset Max</button>
+        {% endif %}
+        </td>
+      <td>
+        {% if ind[0] != "None" && ind[1] != "None" %}  <form action="#" method="post" enctype="multipart/form-data">
+        <input name="del_ind" type="submit" value="Del" />
+        </form>
+        <button class="set_range" name="ind_start" id="ind_start_btn" value="zero">Set Start</button><br>
+        <button class="set_range" name="ind_max" id="ind_max_btn" value="max">Set Max</button><br>
+        <button class="set_range" name="ind_reset" id="ind_max_btn" value="reset">Reset Max</button>
+        {% endif %}
+       </td>
+       <td>
+        {% if  load[0] != "None" && load[1] != "None" %}  <form action="#" method="post" enctype="multipart/form-data">
+        <input name="del_load" type="submit" value="Del" />
+        </form>
+        <button class="set_range" name="load_start" id="load_start_btn" value="zero">Set Start</button><br>
+        <button class="set_range" name="load_max" id="load_max_btn" value="max">Set Max</button><br>
+        <button class="set_range" name="load_reset" id="load_max_btn" value="reset">Reset Max</button>
+        {% endif %}
+       </td>
+  </tr>
+</table>
+<p>Status Bar: {{ val }}</p>
+<form action="#" method="post" enctype="multipart/form-data">
+  <input type="text" name="call_sign">
+  <input type="submit" name="submit" value="Add_callsing">
+</form>
+<form id="select_file" action="/load" method="post" enctype="multipart/form-data">
+  <label for="files">Choose a file: </label>
+  <select name="files" id="files">
+    <option value=""></option>
+        {% for file in files %}
+    <option value="{{file}}">{{file}}</option>
+    {% endfor %}
+  </select>
+  <br><br>
+  <input name="load" type="submit" value="Load">
+</form>
+<p><form id="input_file" action="/load" method="post" enctype="multipart/form-data">
+<p> Enter filename!<input name="file_name" type="text"/><input name="save" type="submit" value="Save"/></p>
+
+</form></p>
+<button name="exit" class="button" id="exit" type="submit" value="Return">Exit</button>
+<p id="status_bar"></p>
+</body>
+<script>
+// displays table of encoder and steppers
+const sessionPins = ["pinA", "PinB", "ratio"]
+const sessionEncStatus = "{{ enc }}"
+console.log(sessionEncStatus)
+const sessionEnc = ["{{ enc_val[0]}}", "{{ enc_val[1] }}"];
+const sessionTune = ["{{ tune[0] }}", "{{ tune[1] }}", "{{ tune[2] }}"];
+const sessionInd = ["{{ ind[0] }}", "{{ ind[1] }}", "{{ ind[2] }}"];
+const sessionLoad = ["{{ load[0] }}", "{{ load[1] }}", "{{ load[2] }}"];
+const sessionArr = [sessionEnc, sessionTune, sessionInd, sessionLoad]
+sessionPins.forEach((pin, i) => {
+  pins = document.querySelectorAll("." + pin)
+  pins.forEach((pin, ii) => {
+    if (i < 2) {
+      pin.innerText = sessionArr[ii][i]
+    } else {
+        pin.innerText = sessionArr[ii + 1][i] == undefined ? 1 : sessionArr[ii + 1][i]
+    }
+  })
+})
+rangeBtns = document.querySelectorAll(".set_range")
+rangeBtns.forEach((btn, i) => {
+  btn.addEventListener("click", event => {
+    formData = new FormData();
+    formData.append(btn["name"].split("_")[1], btn["name"].split("_")[0])
+    fetch("/config", {
+      method: "POST",
+      body:formData
+    })
+  })
+})
+const statusBar = document.getElementById("status_bar");
+const statusBarContents = document.createElement("h3");
+const myBtns = document.querySelectorAll(".button");
+const events = ["mouseover", "mouseout", "click"];
+  myBtns.forEach((button, i)=>{
+    button.addEventListener(events[0], event=>{
+      button.classList.add(events[0])
+    })
+    button.addEventListener(events[1], event=>{
+      button.classList.remove(events[0])
+    })
+    button.addEventListener(events[2], event=>{
+      if  (i < 3) {
+          button.setAttribute("form", "stepper_button_form")
+      } else if (i === 3){
+          window.close()
+      }
+
+    })
+  })
+const exitBtn = document.getElementById("exit")
+statusBar.appendChild(statusBarContents)
+window.addEventListener("message", event =>{
+  if (event.origin !== "http://127.0.0.1:8080") {
+    statusBarContents.innerText = "Security Breach!"
+  } else {
+    statusBarContents.innerText = `Status Bar: ${event.data}`;
+  }
+})
+window.addEventListener("mousewheel", event => {
+  console.log(event.wheelDelta)
+})
+</script>
+</html>

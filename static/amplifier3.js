@@ -2,6 +2,10 @@ let bar_meters = document.getElementById("bar_meters");
 let bar_meter_tune = document.createElement("td");
 let bar_meter_ind = document.createElement("td");
 let bar_meter_load = document.createElement("td");
+let temperature = document.createElement("td");
+let temperature_data = document.createElement("h2");
+temperature_data.setAttribute("style", "color: green")
+temperature.appendChild(temperature_data);
 let clock = document.createElement("td");
 let clock_data = document.createElement("h3");
 clock_data.setAttribute("style", "color: magenta");
@@ -30,6 +34,7 @@ if (headerCall) {
 bar_meters.appendChild(bar_meter_tune);
 bar_meters.appendChild(bar_meter_ind);
 bar_meters.appendChild(bar_meter_load);
+bar_meters.appendChild(temperature);
 bar_meters.appendChild(clock);
 bar_meters.appendChild(call_sign);
 let meter_tune = document.getElementById("meter_tune");
@@ -221,9 +226,10 @@ learn_update.onmessage = (e) => {
         if (configWindow != null) {
             configWindow.postMessage(
                 meter_values.status,
-                "http://127.0.0.1:8080",
+                window.location.origin,
             );
         }
+        temperature_data.innerText = "Temp:" +  Math.round(meter_values.temperature) + " C";
         clock_data.innerText = meter_values.time;
         call_sign_data.innerText = meter_values.call_sign;
         bar_meter_tune.innerHTML =
