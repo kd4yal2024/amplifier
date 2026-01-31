@@ -1,7 +1,6 @@
 pub mod encoder {
-    use rppal::gpio::{Gpio, Level, Mode};
+    use rppal::gpio::{Gpio, Level};
     use rppal::system::DeviceInfo;
-    use serde::{Deserialize, Serialize};
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicI32, Ordering},
@@ -103,12 +102,10 @@ pub mod encoder {
 
 pub mod stepper {
     use std::sync::Mutex;
-    use std::sync::{Arc, mpsc::{self, Receiver, Sender, SyncSender}, atomic::{AtomicI32, Ordering}};
-    use rppal::gpio::{Gpio, Level, Mode};
-    use serde::{Deserialize, Serialize};
-    use core::time;
+    use std::sync::{Arc, mpsc::{self, Sender}, atomic::{AtomicI32, Ordering}};
+    use rppal::gpio::Gpio;
     use std::collections::HashMap;
-    use std::thread::{self, sleep};
+    use std::thread;
     use std::time::Duration;
 
     #[derive(Clone)]
@@ -149,8 +146,6 @@ pub mod stepper {
             }
         }
         pub fn run(&self, val: u32) {
-            let mut steps: u32 = 0;
-            let mut dir: String = String::new();
             let pos: u32 = self.pos.load(Ordering::Relaxed) as u32;
             let gpio = Gpio::new().unwrap();
             let mut pulse_pin = gpio.get(self.pin_a.unwrap()).unwrap().into_output();
@@ -158,7 +153,6 @@ pub mod stepper {
             let mut count = 0;
             pulse_pin.set_low();
             if val > pos {
-                dir = "CW".to_string();
                 dir_pin.set_high();
                 while val > self.pos.load(Ordering::Relaxed) as u32 {
                     count += 1;
@@ -171,7 +165,6 @@ pub mod stepper {
                     }
                 }
             } else if val < pos {
-                dir = "CCW".to_string();
                 dir_pin.set_low();
                 while val < self.pos.load(Ordering::Relaxed) as u32 {
                     count += 1;
@@ -188,11 +181,8 @@ pub mod stepper {
 
         pub fn run_2(&mut self) {
             println!("Inside run 2");
-            let (tx, mut rx) = mpsc::channel();
+            let (tx, rx) = mpsc::channel();
             self.channel = Some(tx);
-            let mut steps: u32 = 0;
-            let mut dir: String = String::new();
-            let pos: u32 = self.pos.load(Ordering::Relaxed) as u32;
             let gpio = Gpio::new().unwrap();
             let mut pulse_pin = gpio.get(self.pin_a.unwrap()).unwrap().into_output();
             let mut dir_pin = gpio.get(self.pin_b.unwrap()).unwrap().into_output();
@@ -210,7 +200,6 @@ pub mod stepper {
                         pulse_pin.set_low();
                         if val > pos.load(Ordering::Relaxed) as u32 {
                             *operate.lock().unwrap() = true;
-                            dir = "CW".to_string();
                             dir_pin.set_high();
                             while val > pos.load(Ordering::Relaxed) as u32 {
                                 count += 1;
@@ -225,7 +214,6 @@ pub mod stepper {
                             *operate.lock().unwrap() = false;
                         } else if val < pos.load(Ordering::Relaxed) as u32{
                             *operate.lock().unwrap() = true;
-                            dir = "CCW".to_string();
                             dir_pin.set_low();
                             while val < pos.load(Ordering::Relaxed) as u32 {
                                 count += 1;
@@ -249,20 +237,17 @@ pub mod stepper {
 }
 pub mod mcp {
     use std::{collections::HashMap, error::Error};
-    use async_std::io;
     //use linux_embedded_hal::I2cdev;
     use mcp230xx::{Direction, Mcp230xx, Mcp23017, Level};
     use rppal::{self, {i2c::I2c}};
     use std::sync::{Arc, Mutex};
-    use embedded_devices::devices::texas_instruments::ina228::{INA228Sync, address::Address, address::Pin};
+    use embedded_devices::{devices::texas_instruments::ina228::{INA228Sync, address::{Address, Pin}}, sensor::VoltageMeasurement};
     use embedded_devices::sensor::OneshotSensorSync;
-    use linux_embedded_hal::i2cdev::core::I2CDevice;
     use uom::si::electric_current::{ampere, milliampere};
-    use uom::si::electric_potential::millivolt;
+    use uom::si::electric_potential::volt;
     use uom::si::electrical_resistance::ohm;
-    use uom::si::power::milliwatt;
     use uom::si::f64::{ElectricCurrent, ElectricalResistance};
-    use uom::si::thermodynamic_temperature::{self, degree_celsius};
+    use uom::si::thermodynamic_temperature::degree_celsius;
     use embedded_hal::delay::DelayNs;
     use std::time::Duration;  
     use embedded_interfaces::i2c::I2cDeviceSync;
@@ -341,7 +326,7 @@ pub mod mcp {
                 if let Ok(_) = mcp.set_direction(pin, Direction::Output){
                     println!("Pin: {:?} Configured as output", pin);
                 }
-                mcp.set_gpio(self.all_pins[i], Level::Low);
+                let _ = mcp.set_gpio(self.all_pins[i], Level::Low);
             }
         }
         pub fn read_pin(&mut self, pin: Mcp23017)-> Result<Level, rppal::i2c::Error> {
@@ -356,7 +341,7 @@ pub mod mcp {
             Ok(())
 
         }
-        pub fn read_val(self) -> Result<(f64, f64), Box<dyn Error>>{
+        pub fn read_val(self) -> Result<(f64, f64, f64), Box<dyn Error>>{
             let i2c_ina = MutexDevice::new(&self.bus);
             let delay = StdDelay::default();
             let mut ina: INA228Sync<StdDelay, I2cDeviceSync<MutexDevice<'_, _>, u8>> = INA228Sync::new_i2c(delay, i2c_ina, Address::A0A1(Pin::Gnd, Pin::Gnd));
@@ -366,7 +351,8 @@ pub mod mcp {
             let val = ina.measure()?;
             let temp = val.temperature.get::<degree_celsius>();
             let current = val.current.get::<milliampere>();
-            Ok((temp, current))
+            let voltage = val.bus_voltage.get::<volt>();
+            Ok((temp, current, voltage))
             
         }
     }
