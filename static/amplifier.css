@@ -275,7 +275,8 @@ meter::-webkit-meter-even-less-good-value { background: linear-gradient(90deg, #
 :-moz-meter-sub-sub-optimum::-moz-meter-bar { background: linear-gradient(90deg, #ff6b6b, #c81d25); }
 
 /* ===== Buttons ===== */
-.button {
+.button,
+.theme-toggle {
   background: linear-gradient(180deg, #ffffff, #f1f5f9);
   border: 1px solid var(--border);
   padding: 0.85rem 1rem;
@@ -298,7 +299,8 @@ meter::-webkit-meter-even-less-good-value { background: linear-gradient(90deg, #
   line-height: 1;
 }
 
-.button:hover {
+.button:hover,
+.theme-toggle:hover {
   transform: translateY(-1px);
   box-shadow: 0 16px 30px rgba(15, 23, 42, 0.12);
   border-color: #7dd3fc;

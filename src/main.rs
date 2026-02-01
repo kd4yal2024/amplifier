@@ -662,6 +662,7 @@ async fn config_get(State(state): State<Arc<Mutex<AppState>>>) -> Html<String> {
             }); 
             output
         },
+        val: "TEST".to_string(),
         pins: state.gpio_pins.clone(),
         tci_server: state.tci_server.clone(),
         follow_me: state.follow_me,
@@ -1462,6 +1463,7 @@ fn recall_handler (state: Arc<Mutex<AppState>>, band: String, band_enum: Bands, 
             Bands::M20 => {let _ = state_lck.pwr_btns.clone().mcp.set_pin(state_lck.pwr_btns.clone().bands[2], mcp230xx::Level::High);},
             Bands::M40 => {let _ = state_lck.pwr_btns.clone().mcp.set_pin(state_lck.pwr_btns.clone().bands[3], mcp230xx::Level::High);},
             Bands::M80 => {let _ = state_lck.pwr_btns.clone().mcp.set_pin(state_lck.pwr_btns.clone().bands[4], mcp230xx::Level::High);},
+            Bands::M15 => {}
         }
         state_lck.band = band_enum;
         state_lck.sw_pos = None;

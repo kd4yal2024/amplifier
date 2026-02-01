@@ -209,28 +209,34 @@ saveBtn.addEventListener("click", (event) => {
 const formVals = ["tune", "ind", "load"];
 let lastSelectorPosition = "";
 let lastBandSelected = "";
-myButtons.forEach((button, i) => {
-    button.classList.add("active");
-    if (i < 3) {
+
+[
+    { btn: tuneBtn, key: "tune" },
+    { btn: indBtn, key: "ind" },
+    { btn: loadBtn, key: "load" },
+].forEach(({ btn, key }) => {
+    if (!btn) return;
+    btn.classList.add("active");
+    btn.addEventListener("click", () => {
         const formData = new FormData();
-        formData.append(formVals[i], "submit");
-        console.log(formData);
-        button.addEventListener("click", (event) => {
-            fetch(`/selector/${formVals[i]}`, {
-                method: "POST",
-                body: formData,
-            });
+        formData.append(key, "submit");
+        fetch(`/selector/${key}`, {
+            method: "POST",
+            body: formData,
         });
-        button.addEventListener("mousewheel", (event) => {
-            const formData = new FormData();
-            formData.append(formVals[i], event.wheelDelta);
-            console.log(formData);
-            fetch("/mousewheel", {
-                method: "POST",
-                body: formData,
-            });
+    });
+    btn.addEventListener("mousewheel", (event) => {
+        const formData = new FormData();
+        formData.append(key, event.wheelDelta);
+        fetch("/mousewheel", {
+            method: "POST",
+            body: formData,
         });
-    }
+    });
+});
+
+myButtons.forEach((button) => {
+    button.classList.add("active");
     button.addEventListener("mouseover", (event) => {
         event.target.classList.add("mouseover");
     });
