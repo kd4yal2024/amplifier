@@ -304,6 +304,7 @@
           {% endif %}
           <div class="cfg-actions">
             <input name="load" type="submit" value="Load">
+            <input name="clear_default" type="submit" value="Clear Default">
           </div>
         </form>
       </div>
@@ -341,22 +342,6 @@
             <input type="checkbox" name="cat_enabled" value="on" {% if cat_enabled %}checked{% endif %} />
             Enable CAT auto band
           </label>
-          <label for="rigctld_host">rigctld Host</label>
-          <input
-            type="text"
-            id="rigctld_host"
-            name="rigctld_host"
-            placeholder="127.0.0.1"
-            value="{{ rigctld_host }}"
-          />
-          <label for="rigctld_port">rigctld Port</label>
-          <input
-            type="text"
-            id="rigctld_port"
-            name="rigctld_port"
-            placeholder="4532"
-            value="{{ rigctld_port }}"
-          />
           <label for="rig_model_id">Rig Model ID (Hamlib)</label>
           <input
             type="text"

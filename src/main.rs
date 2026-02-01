@@ -37,7 +37,8 @@ use std::thread;
 use std::{convert::Infallible, path::PathBuf, time::Duration};
 use tokio::sync::broadcast::{self, Sender, Receiver};
 use tokio::fs::File;
-use tokio::io::{self, AsyncReadExt, AsyncWriteExt, AsyncBufReadExt, BufReader};
+use tokio::io::{self, AsyncReadExt};
+use tokio::process::Command;
 use tokio::time::{interval, sleep, timeout};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
@@ -472,6 +473,10 @@ async fn config_post(
             if state.cat_enabled { "ON" } else { "OFF" }
         );
     }
+    if state.cat_enabled && state.follow_me {
+        state.follow_me = false;
+        state.status = "CAT and TCI cannot both be enabled; CAT kept ON, TCI turned OFF".to_string();
+    }
 
     if let Some(_) = state.enc  {
         if form_data.contains_key("del_enc") {
@@ -866,11 +871,18 @@ async fn tci_follow_task(state: Arc<Mutex<AppState>>) {
 }
 
 async fn cat_follow_task(state: Arc<Mutex<AppState>>) {
-    let mut active_addr = String::new();
+    let mut cat_connected = false;
     loop {
-        let (enabled, host, port) = {
+        let (enabled, model_id, device, baud, civaddr, extra_conf) = {
             let state_lck = state.lock().unwrap();
-            (state_lck.cat_enabled, state_lck.rigctld_host.clone(), state_lck.rigctld_port)
+            (
+                state_lck.cat_enabled,
+                state_lck.rig_model_id,
+                state_lck.rig_serial_device.clone(),
+                state_lck.rig_baud,
+                state_lck.rig_civaddr.clone(),
+                state_lck.rig_extra_conf.clone(),
+            )
         };
 
         if !enabled {
@@ -878,108 +890,108 @@ async fn cat_follow_task(state: Arc<Mutex<AppState>>) {
                 let mut state_lck = state.lock().unwrap();
                 state_lck.cat_status = "DISCONNECTED".to_string();
             }
+            cat_connected = false;
             sleep(Duration::from_millis(500)).await;
             continue;
         }
 
-        if host.is_empty() {
+        if model_id == 0 || device.is_empty() {
             {
                 let mut state_lck = state.lock().unwrap();
                 state_lck.cat_status = "ERROR".to_string();
-                state_lck.status = "CAT enabled but rigctld host is empty".to_string();
+                state_lck.status = "CAT enabled but model/device not set".to_string();
             }
+            cat_connected = false;
             sleep(Duration::from_millis(500)).await;
             continue;
         }
 
-        active_addr = format!("{}:{}", host, port);
-        {
+        if !cat_connected {
             let mut state_lck = state.lock().unwrap();
-            state_lck.cat_status = "CONNECTING".to_string();
-            state_lck.status = format!("CAT connecting: {}", active_addr);
+            state_lck.cat_status = "POLLING".to_string();
         }
 
-        match tokio::net::TcpStream::connect(active_addr.as_str()).await {
-            Ok(stream) => {
-                {
+        let mut cmd = Command::new("rigctl");
+        cmd.arg("-m")
+            .arg(model_id.to_string())
+            .arg("-r")
+            .arg(device.clone());
+        if baud != 0 {
+            cmd.arg("-s").arg(baud.to_string());
+        }
+        if !civaddr.trim().is_empty() {
+            cmd.arg("-c").arg(civaddr.trim());
+        }
+        if !extra_conf.trim().is_empty() {
+            cmd.arg("-C").arg(extra_conf.trim());
+        }
+        cmd.arg("f");
+
+        let output = timeout(Duration::from_millis(1200), cmd.output()).await;
+        match output {
+            Ok(Ok(out)) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let line = stdout.lines().next().unwrap_or("").trim();
+                if line.starts_with("RPRT") || line.is_empty() {
                     let mut state_lck = state.lock().unwrap();
-                    state_lck.cat_status = "CONNECTED".to_string();
-                    state_lck.status = format!("CAT connected: {}", active_addr);
-                }
-                let (reader, mut writer) = stream.into_split();
-                let mut reader = BufReader::new(reader);
-                loop {
-                    {
-                        let state_lck = state.lock().unwrap();
-                        if !state_lck.cat_enabled {
-                            break;
-                        }
-                    }
-                    if let Err(_) = writer.write_all(b"f\n").await {
-                        break;
-                    }
-                    let mut line = String::new();
-                    let read_result = timeout(Duration::from_millis(800), reader.read_line(&mut line)).await;
-                    match read_result {
-                        Ok(Ok(0)) => break,
-                        Ok(Ok(_)) => {
-                            let trimmed = line.trim();
-                            if trimmed.starts_with("RPRT") {
-                                let mut state_lck = state.lock().unwrap();
-                                state_lck.status = format!("CAT error: {}", trimmed);
-                            } else if let Ok(hz) = trimmed.parse::<u64>() {
-                                if let Some(band) = band_from_hz(hz) {
-                                    let maybe_recall = {
-                                        let mut state_lck = state.lock().unwrap();
-                                        if !state_lck.cat_enabled {
-                                            None
-                                        } else if state_lck.last_cat_band == Some(band.clone()) {
-                                            None
-                                        } else {
-                                            state_lck.last_cat_band = Some(band.clone());
-                                            let tune_busy = *state_lck.tune.lock().unwrap().operate.lock().unwrap();
-                                            let ind_busy = *state_lck.ind.lock().unwrap().operate.lock().unwrap();
-                                            let load_busy = *state_lck.load.lock().unwrap().operate.lock().unwrap();
-                                            if tune_busy || ind_busy || load_busy {
-                                                state_lck.status = "CAT: tune in progress, skipping".to_string();
-                                                None
-                                            } else if state_lck.band == band {
-                                                None
-                                            } else {
-                                                Some((band.clone(), band_to_key(&band)))
-                                            }
-                                        }
-                                    };
-                                    if let Some((band_enum, band_key)) = maybe_recall {
-                                        match recall_handler(state.clone(), band_key.to_string(), band_enum, true) {
-                                            Ok(_) => {}
-                                            Err(e) => {
-                                                let mut state_lck = state.lock().unwrap();
-                                                state_lck.status = format!("CAT recall {} failed: {}", band_key, e);
-                                            }
-                                        }
-                                    }
+                    state_lck.cat_status = "ERROR".to_string();
+                    state_lck.status = format!("CAT error: {}", line);
+                    cat_connected = false;
+                } else if let Ok(hz) = line.parse::<u64>() {
+                    if let Some(band) = band_from_hz(hz) {
+                        let maybe_recall = {
+                            let mut state_lck = state.lock().unwrap();
+                            if !cat_connected {
+                                state_lck.cat_status = "CONNECTED".to_string();
+                            }
+                            if !state_lck.cat_enabled {
+                                None
+                            } else if state_lck.last_cat_band == Some(band.clone()) {
+                                None
+                            } else {
+                                state_lck.last_cat_band = Some(band.clone());
+                                let tune_busy = *state_lck.tune.lock().unwrap().operate.lock().unwrap();
+                                let ind_busy = *state_lck.ind.lock().unwrap().operate.lock().unwrap();
+                                let load_busy = *state_lck.load.lock().unwrap().operate.lock().unwrap();
+                                if tune_busy || ind_busy || load_busy {
+                                    state_lck.status = "CAT: tune in progress, skipping".to_string();
+                                    None
+                                } else if state_lck.band == band {
+                                    None
+                                } else {
+                                    Some((band.clone(), band_to_key(&band)))
                                 }
                             }
-                        }
-                        _ => {
-                            let mut state_lck = state.lock().unwrap();
-                            state_lck.status = "CAT timeout waiting for rigctld".to_string();
+                        };
+                        if let Some((band_enum, band_key)) = maybe_recall {
+                            if let Err(e) = recall_handler(state.clone(), band_key.to_string(), band_enum, true) {
+                                let mut state_lck = state.lock().unwrap();
+                                state_lck.status = format!("CAT recall {} failed: {}", band_key, e);
+                            }
                         }
                     }
-                    sleep(Duration::from_millis(400)).await;
+                    cat_connected = true;
+                } else {
+                    let mut state_lck = state.lock().unwrap();
+                    state_lck.cat_status = "ERROR".to_string();
+                    state_lck.status = format!("CAT parse error: {}", line);
+                    cat_connected = false;
                 }
+            }
+            Ok(Err(e)) => {
                 let mut state_lck = state.lock().unwrap();
-                state_lck.cat_status = "DISCONNECTED".to_string();
-                state_lck.status = format!("CAT disconnected: {}", active_addr);
+                state_lck.cat_status = "ERROR".to_string();
+                state_lck.status = format!("CAT rigctl failed: {}", e);
+                cat_connected = false;
             }
             Err(_) => {
                 let mut state_lck = state.lock().unwrap();
                 state_lck.cat_status = "ERROR".to_string();
-                state_lck.status = format!("CAT connect failed: {}", active_addr);
-                sleep(Duration::from_secs(2)).await;
+                state_lck.status = "CAT rigctl timeout".to_string();
+                cat_connected = false;
             }
         }
+        sleep(Duration::from_millis(400)).await;
     }
 }
 
@@ -1135,7 +1147,12 @@ async fn load(State(state): State<Arc<Mutex<AppState>>>, mut form: Multipart) ->
     let mut form_data: HashMap<String, String> = HashMap::new();
     println!("Config PostForm Handler");
     let mut form_data = process_form(form).await;
-    if form_data.contains_key("files") && form_data.contains_key("load") {
+    if form_data.contains_key("clear_default") {
+        let _ = clear_default_profile_name();
+        let mut state_lck = state.lock().unwrap();
+        state_lck.default_profile = String::new();
+        state_lck.status = "Default profile cleared".to_string();
+    } else if form_data.contains_key("files") && form_data.contains_key("load") {
         let file_name = form_data.get("files").unwrap();
         println!("Filename: {}", file_name);
         let _ = load_profile_from_file(state.clone(), file_name);
@@ -1426,6 +1443,10 @@ fn recall_handler (state: Arc<Mutex<AppState>>, band: String, band_enum: Bands, 
             == false
         {
             state_lck.status = format!("No stored settings for {} band", band);
+            if band_enum == Bands::M11 {
+                state_lck.band = band_enum.clone();
+                return Ok(());
+            }
             return Err(Box::new(Error::new(std::io::ErrorKind::Other, "Band not stored")));
         }
     }
@@ -1583,6 +1604,14 @@ fn write_default_profile_name(file_name: &str) -> Result<(), std::io::Error> {
     fs::write(default_profile_path(), format!("{}\n", file_name))
 }
 
+fn clear_default_profile_name() -> Result<(), std::io::Error> {
+    let path = default_profile_path();
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
 fn load_profile_from_file(state: Arc<Mutex<AppState>>, file_name: &str) -> Result<(), String> {
     let full_path = env::current_dir()
         .map_err(|e| e.to_string())?
@@ -1666,6 +1695,9 @@ fn apply_profile_to_state(state: Arc<Mutex<AppState>>, file_name: &str, output: 
     }
     state_lck.follow_me = output.follow_me;
     state_lck.cat_enabled = output.cat_enabled;
+    if state_lck.cat_enabled && state_lck.follow_me {
+        state_lck.follow_me = false;
+    }
     if !output.cat_status.is_empty() {
         state_lck.cat_status = output.cat_status;
     }
