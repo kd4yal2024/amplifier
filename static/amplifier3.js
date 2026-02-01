@@ -32,6 +32,7 @@ if (headerCall) {
 }
 
 const headerTci = document.getElementById("header_tci");
+const headerCat = document.getElementById("header_cat");
 const themeToggle = document.getElementById("theme_toggle");
 
 function applyTheme(theme) {
@@ -263,6 +264,10 @@ learn_update.onmessage = (e) => {
         if (headerTci) {
             const tci = (meter_values.tci_status || "DISCONNECTED").toUpperCase();
             headerTci.textContent = `TCI: ${tci}`;
+        }
+        if (headerCat) {
+            const cat = (meter_values.cat_status || "DISCONNECTED").toUpperCase();
+            headerCat.textContent = `CAT: ${cat}`;
         }
         bar_meter_tune.innerHTML =
             "<p>Current value = " +

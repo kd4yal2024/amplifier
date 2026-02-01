@@ -335,6 +335,77 @@
       </div>
 
       <div class="cfg-block">
+        <h3>CAT Control (Hamlib)</h3>
+        <form action="/config" method="post" enctype="multipart/form-data">
+          <label>
+            <input type="checkbox" name="cat_enabled" value="on" {% if cat_enabled %}checked{% endif %} />
+            Enable CAT auto band
+          </label>
+          <label for="rigctld_host">rigctld Host</label>
+          <input
+            type="text"
+            id="rigctld_host"
+            name="rigctld_host"
+            placeholder="127.0.0.1"
+            value="{{ rigctld_host }}"
+          />
+          <label for="rigctld_port">rigctld Port</label>
+          <input
+            type="text"
+            id="rigctld_port"
+            name="rigctld_port"
+            placeholder="4532"
+            value="{{ rigctld_port }}"
+          />
+          <label for="rig_model_id">Rig Model ID (Hamlib)</label>
+          <input
+            type="text"
+            id="rig_model_id"
+            name="rig_model_id"
+            placeholder="e.g. 307"
+            value="{{ rig_model_id }}"
+          />
+          <label for="rig_serial_device">Serial Device</label>
+          <input
+            type="text"
+            id="rig_serial_device"
+            name="rig_serial_device"
+            placeholder="/dev/serial/by-id/..."
+            value="{{ rig_serial_device }}"
+          />
+          <label for="rig_baud">Baud</label>
+          <input
+            type="text"
+            id="rig_baud"
+            name="rig_baud"
+            placeholder="e.g. 115200"
+            value="{{ rig_baud }}"
+          />
+          <label for="rig_civaddr">CI-V Address (optional)</label>
+          <input
+            type="text"
+            id="rig_civaddr"
+            name="rig_civaddr"
+            placeholder="e.g. 0x94"
+            value="{{ rig_civaddr }}"
+          />
+          <label for="rig_extra_conf">Extra Hamlib config (optional)</label>
+          <input
+            type="text"
+            id="rig_extra_conf"
+            name="rig_extra_conf"
+            placeholder="e.g. stop_bits=1"
+            value="{{ rig_extra_conf }}"
+          />
+          <div class="cfg-actions">
+            <input name="save_cat" type="submit" value="Save CAT Settings" />
+          </div>
+        </form>
+        <p>CAT Status: <strong>{{ cat_status }}</strong></p>
+        <p>CAT polls rigctld for frequency and auto‑recalls stored bands.</p>
+      </div>
+
+      <div class="cfg-block">
         <h3>Save Profile</h3>
         <form id="input_file" action="/load" method="post" enctype="multipart/form-data">
           <label>Enter filename:</label>

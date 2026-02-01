@@ -37,8 +37,8 @@ use std::thread;
 use std::{convert::Infallible, path::PathBuf, time::Duration};
 use tokio::sync::broadcast::{self, Sender, Receiver};
 use tokio::fs::File;
-use tokio::io::{self, AsyncReadExt};
-use tokio::time::{interval, sleep};
+use tokio::io::{self, AsyncReadExt, AsyncWriteExt, AsyncBufReadExt, BufReader};
+use tokio::time::{interval, sleep, timeout};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_stream::StreamExt as TokioStreamExt;
@@ -67,6 +67,15 @@ struct ConfigTemplate {
     follow_me: bool,
     tci_status: String,
     default_profile: String,
+    cat_enabled: bool,
+    cat_status: String,
+    rigctld_host: String,
+    rigctld_port: u16,
+    rig_model_id: i32,
+    rig_serial_device: String,
+    rig_baud: u32,
+    rig_civaddr: String,
+    rig_extra_conf: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -88,6 +97,7 @@ struct SseData {
     time: String,
     status: String,
     tci_status: String,
+    cat_status: String,
 }
 impl SseData {
     fn new() -> SseData {
@@ -122,6 +132,7 @@ impl SseData {
             call_sign: String::from("-----"),
             status: "Hello ALL BAND AMP".to_string(),
             tci_status: "DISCONNECTED".to_string(),
+            cat_status: "DISCONNECTED".to_string(),
         }
     }
 }
@@ -140,6 +151,24 @@ struct StoredData {
     tci_server: String,
     #[serde(default)]
     follow_me: bool,
+    #[serde(default)]
+    cat_enabled: bool,
+    #[serde(default)]
+    cat_status: String,
+    #[serde(default)]
+    rigctld_host: String,
+    #[serde(default)]
+    rigctld_port: u16,
+    #[serde(default)]
+    rig_model_id: i32,
+    #[serde(default)]
+    rig_serial_device: String,
+    #[serde(default)]
+    rig_baud: u32,
+    #[serde(default)]
+    rig_civaddr: String,
+    #[serde(default)]
+    rig_extra_conf: String,
 }
 impl StoredData {
     fn new() -> Self {
@@ -154,6 +183,15 @@ impl StoredData {
             mem_valid: HashMap::new(),
             tci_server: String::new(),
             follow_me: false,
+            cat_enabled: false,
+            cat_status: String::new(),
+            rigctld_host: "127.0.0.1".to_string(),
+            rigctld_port: 4532,
+            rig_model_id: 0,
+            rig_serial_device: String::new(),
+            rig_baud: 0,
+            rig_civaddr: String::new(),
+            rig_extra_conf: String::new(),
         }
     }
 }
@@ -184,6 +222,16 @@ struct AppState {
     follow_me: bool,
     last_tci_band: Option<Bands>,
     tci_status: String,
+    cat_enabled: bool,
+    cat_status: String,
+    rigctld_host: String,
+    rigctld_port: u16,
+    rig_model_id: i32,
+    rig_serial_device: String,
+    rig_baud: u32,
+    rig_civaddr: String,
+    rig_extra_conf: String,
+    last_cat_band: Option<Bands>,
     default_profile: String,
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -284,6 +332,16 @@ async fn main() -> Result<(), std::io::Error> {
         follow_me: false,
         last_tci_band: None,
         tci_status: "DISCONNECTED".to_string(),
+        cat_enabled: false,
+        cat_status: "DISCONNECTED".to_string(),
+        rigctld_host: "127.0.0.1".to_string(),
+        rigctld_port: 4532,
+        rig_model_id: 0,
+        rig_serial_device: String::new(),
+        rig_baud: 0,
+        rig_civaddr: String::new(),
+        rig_extra_conf: String::new(),
+        last_cat_band: None,
         default_profile: String::new(),
     }));
 
@@ -296,6 +354,7 @@ async fn main() -> Result<(), std::io::Error> {
     tokio::spawn(aquire_data(app_state.clone()));
     tokio::spawn(aquire_i2c_data(app_state.clone()));
     tokio::spawn(tci_follow_task(app_state.clone()));
+    tokio::spawn(cat_follow_task(app_state.clone()));
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
@@ -364,6 +423,53 @@ async fn config_post(
         state.status = format!(
             "TCI settings updated (Follow Me: {})",
             if state.follow_me { "ON" } else { "OFF" }
+        );
+    }
+    if form_data.contains_key("save_cat")
+        || form_data.contains_key("cat_enabled")
+        || form_data.contains_key("rigctld_host")
+        || form_data.contains_key("rigctld_port")
+        || form_data.contains_key("rig_model_id")
+        || form_data.contains_key("rig_serial_device")
+        || form_data.contains_key("rig_baud")
+        || form_data.contains_key("rig_civaddr")
+        || form_data.contains_key("rig_extra_conf")
+    {
+        state.cat_enabled = form_data.get("cat_enabled").map(|v| v == "on").unwrap_or(false);
+        if let Some(host) = form_data.get("rigctld_host") {
+            state.rigctld_host = host.trim().to_string();
+        }
+        if let Some(port) = form_data.get("rigctld_port") {
+            let port = port.trim();
+            if port.is_empty() {
+                state.rigctld_port = 4532;
+            } else if let Ok(parsed) = port.parse::<u16>() {
+                state.rigctld_port = parsed;
+            } else {
+                state.status = "Invalid rigctld port".to_string();
+                return Redirect::to("/config");
+            }
+        }
+        if let Some(model_id) = form_data.get("rig_model_id") {
+            let model_id = model_id.trim();
+            state.rig_model_id = model_id.parse::<i32>().unwrap_or(0);
+        }
+        if let Some(dev) = form_data.get("rig_serial_device") {
+            state.rig_serial_device = dev.trim().to_string();
+        }
+        if let Some(baud) = form_data.get("rig_baud") {
+            let baud = baud.trim();
+            state.rig_baud = baud.parse::<u32>().unwrap_or(0);
+        }
+        if let Some(addr) = form_data.get("rig_civaddr") {
+            state.rig_civaddr = addr.trim().to_string();
+        }
+        if let Some(extra) = form_data.get("rig_extra_conf") {
+            state.rig_extra_conf = extra.trim().to_string();
+        }
+        state.status = format!(
+            "CAT settings updated (Auto band: {})",
+            if state.cat_enabled { "ON" } else { "OFF" }
         );
     }
 
@@ -567,6 +673,15 @@ async fn config_get(State(state): State<Arc<Mutex<AppState>>>) -> Html<String> {
         follow_me: state.follow_me,
         tci_status: state.tci_status.clone(),
         default_profile: state.default_profile.clone(),
+        cat_enabled: state.cat_enabled,
+        cat_status: state.cat_status.clone(),
+        rigctld_host: state.rigctld_host.clone(),
+        rigctld_port: state.rigctld_port,
+        rig_model_id: state.rig_model_id,
+        rig_serial_device: state.rig_serial_device.clone(),
+        rig_baud: state.rig_baud,
+        rig_civaddr: state.rig_civaddr.clone(),
+        rig_extra_conf: state.rig_extra_conf.clone(),
     };
     Html(template.render().unwrap().to_string())
 }
@@ -634,10 +749,19 @@ fn band_to_key(band: &Bands) -> &'static str {
 async fn tci_follow_task(state: Arc<Mutex<AppState>>) {
     let mut active_server = String::new();
     loop {
-        let (server, enabled) = {
+        let (server, enabled, cat_enabled) = {
             let state_lck = state.lock().unwrap();
-            (state_lck.tci_server.clone(), state_lck.follow_me)
+            (state_lck.tci_server.clone(), state_lck.follow_me, state_lck.cat_enabled)
         };
+
+        if cat_enabled {
+            {
+                let mut state_lck = state.lock().unwrap();
+                state_lck.tci_status = "PAUSED".to_string();
+            }
+            sleep(Duration::from_millis(500)).await;
+            continue;
+        }
 
         if !enabled || server.is_empty() {
             {
@@ -735,6 +859,124 @@ async fn tci_follow_task(state: Arc<Mutex<AppState>>) {
                     state_lck.tci_status = "ERROR".to_string();
                 }
                 println!("TCI: connect failed to {}", active_server);
+                sleep(Duration::from_secs(2)).await;
+            }
+        }
+    }
+}
+
+async fn cat_follow_task(state: Arc<Mutex<AppState>>) {
+    let mut active_addr = String::new();
+    loop {
+        let (enabled, host, port) = {
+            let state_lck = state.lock().unwrap();
+            (state_lck.cat_enabled, state_lck.rigctld_host.clone(), state_lck.rigctld_port)
+        };
+
+        if !enabled {
+            {
+                let mut state_lck = state.lock().unwrap();
+                state_lck.cat_status = "DISCONNECTED".to_string();
+            }
+            sleep(Duration::from_millis(500)).await;
+            continue;
+        }
+
+        if host.is_empty() {
+            {
+                let mut state_lck = state.lock().unwrap();
+                state_lck.cat_status = "ERROR".to_string();
+                state_lck.status = "CAT enabled but rigctld host is empty".to_string();
+            }
+            sleep(Duration::from_millis(500)).await;
+            continue;
+        }
+
+        active_addr = format!("{}:{}", host, port);
+        {
+            let mut state_lck = state.lock().unwrap();
+            state_lck.cat_status = "CONNECTING".to_string();
+            state_lck.status = format!("CAT connecting: {}", active_addr);
+        }
+
+        match tokio::net::TcpStream::connect(active_addr.as_str()).await {
+            Ok(stream) => {
+                {
+                    let mut state_lck = state.lock().unwrap();
+                    state_lck.cat_status = "CONNECTED".to_string();
+                    state_lck.status = format!("CAT connected: {}", active_addr);
+                }
+                let (reader, mut writer) = stream.into_split();
+                let mut reader = BufReader::new(reader);
+                loop {
+                    {
+                        let state_lck = state.lock().unwrap();
+                        if !state_lck.cat_enabled {
+                            break;
+                        }
+                    }
+                    if let Err(_) = writer.write_all(b"f\n").await {
+                        break;
+                    }
+                    let mut line = String::new();
+                    let read_result = timeout(Duration::from_millis(800), reader.read_line(&mut line)).await;
+                    match read_result {
+                        Ok(Ok(0)) => break,
+                        Ok(Ok(_)) => {
+                            let trimmed = line.trim();
+                            if trimmed.starts_with("RPRT") {
+                                let mut state_lck = state.lock().unwrap();
+                                state_lck.status = format!("CAT error: {}", trimmed);
+                            } else if let Ok(hz) = trimmed.parse::<u64>() {
+                                if let Some(band) = band_from_hz(hz) {
+                                    let maybe_recall = {
+                                        let mut state_lck = state.lock().unwrap();
+                                        if !state_lck.cat_enabled {
+                                            None
+                                        } else if state_lck.last_cat_band == Some(band.clone()) {
+                                            None
+                                        } else {
+                                            state_lck.last_cat_band = Some(band.clone());
+                                            let tune_busy = *state_lck.tune.lock().unwrap().operate.lock().unwrap();
+                                            let ind_busy = *state_lck.ind.lock().unwrap().operate.lock().unwrap();
+                                            let load_busy = *state_lck.load.lock().unwrap().operate.lock().unwrap();
+                                            if tune_busy || ind_busy || load_busy {
+                                                state_lck.status = "CAT: tune in progress, skipping".to_string();
+                                                None
+                                            } else if state_lck.band == band {
+                                                None
+                                            } else {
+                                                Some((band.clone(), band_to_key(&band)))
+                                            }
+                                        }
+                                    };
+                                    if let Some((band_enum, band_key)) = maybe_recall {
+                                        match recall_handler(state.clone(), band_key.to_string(), band_enum, true) {
+                                            Ok(_) => {}
+                                            Err(e) => {
+                                                let mut state_lck = state.lock().unwrap();
+                                                state_lck.status = format!("CAT recall {} failed: {}", band_key, e);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {
+                            let mut state_lck = state.lock().unwrap();
+                            state_lck.status = "CAT timeout waiting for rigctld".to_string();
+                        }
+                    }
+                    sleep(Duration::from_millis(400)).await;
+                }
+                let mut state_lck = state.lock().unwrap();
+                state_lck.cat_status = "DISCONNECTED".to_string();
+                state_lck.status = format!("CAT disconnected: {}", active_addr);
+            }
+            Err(_) => {
+                let mut state_lck = state.lock().unwrap();
+                state_lck.cat_status = "ERROR".to_string();
+                state_lck.status = format!("CAT connect failed: {}", active_addr);
                 sleep(Duration::from_secs(2)).await;
             }
         }
@@ -1063,6 +1305,7 @@ async fn aquire_data(state: Arc<Mutex<AppState>>) {
         sse_output.temperature = val.temperature;
         sse_output.status = val.status.clone();
         sse_output.tci_status = val.tci_status.clone();
+        sse_output.cat_status = val.cat_status.clone();
         let _ = val.sender.send(serde_json::to_string(&sse_output).unwrap());    
     }
 }
@@ -1269,6 +1512,15 @@ fn sleep_save(state: Arc<Mutex<AppState>>) {
     saved_state.mem_valid = state_lck.mem_valid.clone();
     saved_state.tci_server = state_lck.tci_server.clone();
     saved_state.follow_me = state_lck.follow_me;
+    saved_state.cat_enabled = state_lck.cat_enabled;
+    saved_state.cat_status = state_lck.cat_status.clone();
+    saved_state.rigctld_host = state_lck.rigctld_host.clone();
+    saved_state.rigctld_port = state_lck.rigctld_port;
+    saved_state.rig_model_id = state_lck.rig_model_id;
+    saved_state.rig_serial_device = state_lck.rig_serial_device.clone();
+    saved_state.rig_baud = state_lck.rig_baud;
+    saved_state.rig_civaddr = state_lck.rig_civaddr.clone();
+    saved_state.rig_extra_conf = state_lck.rig_extra_conf.clone();
     println!("Attempting to save data");
     if let Ok(output_data) = serde_json::to_string_pretty(&saved_state) {
         println!("Saving file to {}", full_path.to_string_lossy().to_string());
@@ -1413,6 +1665,31 @@ fn apply_profile_to_state(state: Arc<Mutex<AppState>>, file_name: &str, output: 
         state_lck.tci_server = output.tci_server;
     }
     state_lck.follow_me = output.follow_me;
+    state_lck.cat_enabled = output.cat_enabled;
+    if !output.cat_status.is_empty() {
+        state_lck.cat_status = output.cat_status;
+    }
+    if !output.rigctld_host.is_empty() {
+        state_lck.rigctld_host = output.rigctld_host;
+    }
+    if output.rigctld_port != 0 {
+        state_lck.rigctld_port = output.rigctld_port;
+    }
+    if output.rig_model_id != 0 {
+        state_lck.rig_model_id = output.rig_model_id;
+    }
+    if !output.rig_serial_device.is_empty() {
+        state_lck.rig_serial_device = output.rig_serial_device;
+    }
+    if output.rig_baud != 0 {
+        state_lck.rig_baud = output.rig_baud;
+    }
+    if !output.rig_civaddr.is_empty() {
+        state_lck.rig_civaddr = output.rig_civaddr;
+    }
+    if !output.rig_extra_conf.is_empty() {
+        state_lck.rig_extra_conf = output.rig_extra_conf;
+    }
 }
 
 async fn read_html_from_file<P: AsRef<path::Path>>(path: P) -> Result<String, std::io::Error> {
