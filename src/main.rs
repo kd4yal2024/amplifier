@@ -22,6 +22,7 @@ use axum::{
 use axum_extra::TypedHeader;
 use async_stream::stream;
 use futures_util::stream::{self, Stream};
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json;
 use core::time;
@@ -38,6 +39,8 @@ use tokio::sync::broadcast::{self, Sender, Receiver};
 use tokio::fs::File;
 use tokio::io::{self, AsyncReadExt};
 use tokio::time::{interval, sleep};
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::Message;
 use tokio_stream::StreamExt as TokioStreamExt;
 use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -60,6 +63,10 @@ struct ConfigTemplate {
     pins: Vec<u8>,
     files: Vec<String>,
     val: String,
+    tci_server: String,
+    follow_me: bool,
+    tci_status: String,
+    default_profile: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -80,6 +87,7 @@ struct SseData {
     call_sign: String,
     time: String,
     status: String,
+    tci_status: String,
 }
 impl SseData {
     fn new() -> SseData {
@@ -113,6 +121,7 @@ impl SseData {
             time: String::new(),
             call_sign: String::from("-----"),
             status: "Hello ALL BAND AMP".to_string(),
+            tci_status: "DISCONNECTED".to_string(),
         }
     }
 }
@@ -125,6 +134,12 @@ struct StoredData {
     mem: HashMap<String, HashMap<String, u32>>,
     band: Bands,
     call_sign: String,
+    #[serde(default)]
+    mem_valid: HashMap<String, bool>,
+    #[serde(default)]
+    tci_server: String,
+    #[serde(default)]
+    follow_me: bool,
 }
 impl StoredData {
     fn new() -> Self {
@@ -136,6 +151,9 @@ impl StoredData {
             mem: HashMap::new(),
             band: Bands::M10,
             call_sign: String::from("-----"),
+            mem_valid: HashMap::new(),
+            tci_server: String::new(),
+            follow_me: false,
         }
     }
 }
@@ -161,6 +179,12 @@ struct AppState {
     call_sign: String,
     status: String,
     sender: Sender<String>,
+    mem_valid: HashMap<String, bool>,
+    tci_server: String,
+    follow_me: bool,
+    last_tci_band: Option<Bands>,
+    tci_status: String,
+    default_profile: String,
 }
 #[derive(Clone, Serialize, Deserialize)]
 enum Select {
@@ -168,10 +192,11 @@ enum Select {
     Ind,
     Load,
 }
-#[derive(Clone, Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 enum Bands {
     M10,
     M11,
+    M15,
     M20,
     M40,
     M80,
@@ -247,12 +272,30 @@ async fn main() -> Result<(), std::io::Error> {
         call_sign: String::new(),
         status: String::new(),
         sender: tx,
+        mem_valid: HashMap::from([
+            ("10M".to_string(), false),
+            ("11M".to_string(), false),
+            ("15M".to_string(), false),
+            ("20M".to_string(), false),
+            ("40M".to_string(), false),
+            ("80M".to_string(), false),
+        ]),
+        tci_server: String::new(),
+        follow_me: false,
+        last_tci_band: None,
+        tci_status: "DISCONNECTED".to_string(),
+        default_profile: String::new(),
     }));
+
+    if let Some(profile_name) = read_default_profile_name() {
+        let _ = load_profile_from_file(app_state.clone(), &profile_name);
+    }
 
     // looking for config files in directory
 
     tokio::spawn(aquire_data(app_state.clone()));
     tokio::spawn(aquire_i2c_data(app_state.clone()));
+    tokio::spawn(tci_follow_task(app_state.clone()));
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
@@ -303,6 +346,27 @@ async fn config_post(
     let mut form_data = process_form(form).await;
     let mut state = state.lock().unwrap();
     println!("FormData: {:?}", form_data);
+    if form_data.contains_key("tci_server") || form_data.contains_key("follow_me") {
+        if let Some(server) = form_data.get("tci_server") {
+            let server = server.trim();
+            if server.is_empty() {
+                state.tci_server = String::new();
+            } else if server.starts_with("ws://") || server.starts_with("wss://") {
+                state.tci_server = server.to_string();
+            } else {
+                state.status = "Invalid TCI server URL (must start with ws:// or wss://)".to_string();
+                return Redirect::to("/config");
+            }
+        }
+        if let Some(follow) = form_data.get("follow_me") {
+            state.follow_me = follow == "on";
+        }
+        state.status = format!(
+            "TCI settings updated (Follow Me: {})",
+            if state.follow_me { "ON" } else { "OFF" }
+        );
+    }
+
     if let Some(_) = state.enc  {
         if form_data.contains_key("del_enc") {
             let pin_a = state.enc.clone().unwrap().pin_a;
@@ -499,6 +563,10 @@ async fn config_get(State(state): State<Arc<Mutex<AppState>>>) -> Html<String> {
         },
         val: "TEST".to_string(),
         pins: state.gpio_pins.clone(),
+        tci_server: state.tci_server.clone(),
+        follow_me: state.follow_me,
+        tci_status: state.tci_status.clone(),
+        default_profile: state.default_profile.clone(),
     };
     Html(template.render().unwrap().to_string())
 }
@@ -515,6 +583,162 @@ async fn sse_handler(
         }
     }).keep_alive(KeepAlive::default())
 
+}
+
+fn split_frames(s: &str) -> impl Iterator<Item = &str> {
+    s.split(|c| c == ';' || c == '\n' || c == '\r')
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+}
+
+fn parse_any_tx_hz(frame: &str) -> Option<u64> {
+    let (k, v) = frame.split_once(':')?;
+    let k = k.trim();
+
+    if k == "tx_frequency" || k == "rx_frequency" || k == "trx_frequency" {
+        return v.trim().parse::<u64>().ok();
+    }
+
+    if k == "tx_frequency_thetis" || k == "rx_frequency_thetis" || k == "trx_frequency_thetis" {
+        let mut parts = v.split(',').map(str::trim);
+        let hz: u64 = parts.next()?.parse().ok()?;
+        return Some(hz);
+    }
+
+    None
+}
+
+fn band_from_hz(hz: u64) -> Option<Bands> {
+    match hz {
+        3_500_000..=4_000_000 => Some(Bands::M80),
+        7_000_000..=7_300_000 => Some(Bands::M40),
+        14_000_000..=14_350_000 => Some(Bands::M20),
+        21_000_000..=21_450_000 => Some(Bands::M15),
+        26_000_000..=27_999_999 => Some(Bands::M11),
+        28_000_000..=29_700_000 => Some(Bands::M10),
+        _ => None,
+    }
+}
+
+fn band_to_key(band: &Bands) -> &'static str {
+    match band {
+        Bands::M10 => "10M",
+        Bands::M11 => "11M",
+        Bands::M15 => "15M",
+        Bands::M20 => "20M",
+        Bands::M40 => "40M",
+        Bands::M80 => "80M",
+    }
+}
+
+async fn tci_follow_task(state: Arc<Mutex<AppState>>) {
+    let mut active_server = String::new();
+    loop {
+        let (server, enabled) = {
+            let state_lck = state.lock().unwrap();
+            (state_lck.tci_server.clone(), state_lck.follow_me)
+        };
+
+        if !enabled || server.is_empty() {
+            {
+                let mut state_lck = state.lock().unwrap();
+                state_lck.tci_status = "DISCONNECTED".to_string();
+            }
+            sleep(Duration::from_millis(500)).await;
+            continue;
+        }
+
+        active_server = server.clone();
+        {
+            let mut state_lck = state.lock().unwrap();
+            state_lck.tci_status = "CONNECTING".to_string();
+            state_lck.status = format!("TCI connecting: {}", active_server);
+        }
+        println!("TCI: connecting to {}", active_server);
+        match connect_async(active_server.as_str()).await {
+            Ok((mut ws, _)) => {
+                {
+                    let mut state_lck = state.lock().unwrap();
+                    state_lck.tci_status = "CONNECTED".to_string();
+                    state_lck.status = format!("TCI connected: {}", active_server);
+                }
+                println!("TCI: connected to {}", active_server);
+                loop {
+                    tokio::select! {
+                        msg = futures_util::StreamExt::next(&mut ws) => {
+                            match msg {
+                                Some(Ok(Message::Text(s))) => {
+                                    for frame in split_frames(&s) {
+                                        if let Some(hz) = parse_any_tx_hz(frame) {
+                                            if let Some(band) = band_from_hz(hz) {
+                                                println!("TCI: band {} at {} Hz", band_to_key(&band), hz);
+                                                {
+                                                    let mut state_lck = state.lock().unwrap();
+                                                    state_lck.status = format!(
+                                                        "Follow Me: detected {} at {} Hz",
+                                                        band_to_key(&band),
+                                                        hz
+                                                    );
+                                                }
+                                                let maybe_recall = {
+                                                    let mut state_lck = state.lock().unwrap();
+                                                    if !state_lck.follow_me || state_lck.tci_server != active_server {
+                                                        None
+                                                    } else if state_lck.last_tci_band == Some(band.clone()) {
+                                                        None
+                                                    } else {
+                                                        state_lck.last_tci_band = Some(band.clone());
+                                                        let tune_busy = *state_lck.tune.lock().unwrap().operate.lock().unwrap();
+                                                        let ind_busy = *state_lck.ind.lock().unwrap().operate.lock().unwrap();
+                                                        let load_busy = *state_lck.load.lock().unwrap().operate.lock().unwrap();
+                                                        if tune_busy || ind_busy || load_busy {
+                                                            state_lck.status = "Follow Me: tune in progress, skipping".to_string();
+                                                            None
+                                                        } else if state_lck.band == band {
+                                                            None
+                                                        } else {
+                                                            Some((band.clone(), band_to_key(&band)))
+                                                        }
+                                                    }
+                                                };
+
+                                                if let Some((band_enum, band_key)) = maybe_recall {
+                                                    match recall_handler(state.clone(), band_key.to_string(), band_enum, true) {
+                                                        Ok(_) => println!("TCI: recall {}", band_key),
+                                                        Err(e) => println!("TCI: recall {} failed: {}", band_key, e),
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Some(Ok(Message::Close(_))) | None => break,
+                                _ => {}
+                            }
+                        }
+                        _ = sleep(Duration::from_millis(250)) => {
+                            let state_lck = state.lock().unwrap();
+                            if !state_lck.follow_me || state_lck.tci_server != active_server {
+                                break;
+                            }
+                        }
+                    }
+                }
+                let mut state_lck = state.lock().unwrap();
+                state_lck.tci_status = "DISCONNECTED".to_string();
+                state_lck.status = format!("TCI disconnected: {}", active_server);
+            }
+            Err(_) => {
+                {
+                    let mut state_lck = state.lock().unwrap();
+                    state_lck.status = format!("TCI connect failed: {}", active_server);
+                    state_lck.tci_status = "ERROR".to_string();
+                }
+                println!("TCI: connect failed to {}", active_server);
+                sleep(Duration::from_secs(2)).await;
+            }
+        }
+    }
 }
 
 //Selects a stepper to be tuned.
@@ -593,37 +817,32 @@ async fn recall(Path(path): Path<String>, State(state): State<Arc<Mutex<AppState
             state.lock().unwrap().sleep = true;
             match path.as_str() {
                 "M10" => {
-                    if let Ok(_) = recall_handler(state.clone(), "10M".to_string(), Bands::M10) {
+                    if let Ok(_) = recall_handler(state.clone(), "10M".to_string(), Bands::M10, false) {
                         
-                    } else  {
-                        state.lock().unwrap().status = format!("No Encoder Present");
                     }
                 }
                 "M11" => {
-                    if let Ok(_) = recall_handler(state.clone(), "11M".to_string(), Bands::M11) {
+                    if let Ok(_) = recall_handler(state.clone(), "11M".to_string(), Bands::M11, false) {
         
-                    } else  {
-                        state.lock().unwrap().status = format!("No Encoder Present");
+                    }
+                }
+                "M15" => {
+                    if let Ok(_) = recall_handler(state.clone(), "15M".to_string(), Bands::M15, false) {
+
                     }
                 }
                 "M20" => {
-                    if let Ok(_) = recall_handler(state.clone(), "20M".to_string(), Bands::M20) {
+                    if let Ok(_) = recall_handler(state.clone(), "20M".to_string(), Bands::M20, false) {
             
-                    } else  {
-                        state.lock().unwrap().status = format!("No Encoder Present");
                     }
                 }
                 "M40" => {
-                    if let Ok(_) = recall_handler(state.clone(), "40M".to_string(), Bands::M40) {
+                    if let Ok(_) = recall_handler(state.clone(), "40M".to_string(), Bands::M40, false) {
         
-                    } else  {
-                        state.lock().unwrap().status = format!("No Encoder Present");
                     }
                 }
                 "M80" => {
-                    if let Ok(_) = recall_handler(state.clone(), "80M".to_string(), Bands::M80) {
-                    } else  {
-                        state.lock().unwrap().status = format!("No Encoder Present");
+                    if let Ok(_) = recall_handler(state.clone(), "80M".to_string(), Bands::M80, false) {
                     }
                 }
                 _ => {
@@ -644,6 +863,9 @@ async fn store(Path(path): Path<String>, State(state): State<Arc<Mutex<AppState>
         }
         "M11" => {
             store_handler(state, "11M".to_string());
+        }
+        "M15" => {
+            store_handler(state, "15M".to_string());
         }
         "M20" => {
             store_handler(state, "20M".to_string());
@@ -674,67 +896,12 @@ async fn load(State(state): State<Arc<Mutex<AppState>>>, mut form: Multipart) ->
     if form_data.contains_key("files") && form_data.contains_key("load") {
         let file_name = form_data.get("files").unwrap();
         println!("Filename: {}", file_name);
-        let file_path = path::Path::new(file_name);
-        let mut full_path = env::current_dir().unwrap().join("static").join(file_name);
-        if let Ok(file_data) = fs::read_to_string(full_path) {
-            let output: StoredData = serde_json::from_str(&file_data).unwrap();
-            println!("{:?}", output);
+        let _ = load_profile_from_file(state.clone(), file_name);
+        if form_data.contains_key("default_profile") {
+            let _ = write_default_profile_name(file_name);
             let mut state_lck = state.lock().unwrap();
-            state_lck.file = file_name.to_string();
-            let mut my_stepper_arr = [
-                state_lck.tune.clone(),
-                state_lck.ind.clone(),
-                state_lck.load.clone(),
-                ];
-            let bands = ["10M", "11M", "20M", "40M", "80M"];
-            let  my_output_arr = [&output.tune, &output.ind, &output.load];
-            for (i, stepper) in my_stepper_arr.iter_mut().enumerate() {
-                let name = &stepper.lock().unwrap().name.clone();
-                if stepper.lock().unwrap().pin_a.unwrap_or(0u8) != 0 {
-                    handle_stepper(&mut state_lck, form_data.clone(), name, false, |x| stepper.clone());
-                }
-                thread::sleep(Duration::from_millis(10));
-                println!("Adding PinA: {:?}", stepper.lock().unwrap().pin_a);
-                println!("Adding PinB: {:?}", stepper.lock().unwrap().pin_b);
-                stepper.lock().unwrap().pin_a = if my_output_arr[i].contains_key("PinA") {Some(*my_output_arr[i].get("PinA").unwrap() as u8)} else {None};
-                stepper.lock().unwrap().pin_b = if my_output_arr[i].contains_key("PinB") {Some(*my_output_arr[i].get("PinB").unwrap() as u8)} else {None};
-                stepper.lock().unwrap().ena = if my_output_arr[i].contains_key("ena") {Some(*my_output_arr[i].get("ena").unwrap() as u8)} else {None};
-                stepper.lock().unwrap().max.store(*my_output_arr[i].get("max").unwrap() as i32, Ordering::Relaxed);
-                stepper.lock().unwrap().pos.store(*my_output_arr[i].get("pos").unwrap() as i32, Ordering::Relaxed);
-                stepper.lock().unwrap().ratio = *my_output_arr[i].get("ratio").unwrap() as u8;
-                let mut stepper_lck = stepper.lock().unwrap();
-                if stepper_lck.name == "ind" {
-                    println!("Inductor set to lower speed");
-                    stepper_lck.speed = Duration::from_micros(400);
-                }
-                if let Some(_) = stepper_lck.pin_a {
-                    stepper_lck.run_2();
-                }
-                drop(stepper_lck);
-                for band in bands {
-                    let mut stepper_lck = stepper.lock().unwrap();
-                    println!("Stepper name: {}", stepper_lck.name);
-                    let value = *output.mem.get(&stepper_lck.name).unwrap().get(&band.to_string()).unwrap_or(&0) as i32;
-                    stepper_lck.mem.entry(band.to_string()).and_modify(|v| v.store(value, Ordering::Relaxed));
-                }
-            }   
-            state_lck.enc = if output.enc.contains_key("PinA") && output.enc.contains_key("PinB") {
-                if let Some(enc) = &state_lck.enc {
-                    *enc.stop.lock().unwrap() = true;
-                    println!("Deconfiguring Encoder to load new config");
-                }
-                Some(Encoder::new( 
-                    *output.enc.get("PinA").unwrap() as u8,
-                    *output.enc.get("PinB").unwrap() as u8,
-                ))
-            } else {
-                None
-            };
-            if let Some(mut enc) = state_lck.enc.clone() {
-                let _ = enc.run();
-            }
-            state_lck.band = output.band;
-            state_lck.call_sign = output.call_sign;
+            state_lck.default_profile = file_name.to_string();
+            state_lck.status = format!("Default profile set: {}", file_name);
         }
     } else if form_data.contains_key("file_name") {
             let mut file_name = form_data.get("file_name").unwrap().clone().to_string();
@@ -895,6 +1062,7 @@ async fn aquire_data(state: Arc<Mutex<AppState>>) {
         sse_output.grid_a = val.gauges.grid_a;
         sse_output.temperature = val.temperature;
         sse_output.status = val.status.clone();
+        sse_output.tci_status = val.tci_status.clone();
         let _ = val.sender.send(serde_json::to_string(&sse_output).unwrap());    
     }
 }
@@ -1004,8 +1172,20 @@ where
         
  }
 
-fn recall_handler (state: Arc<Mutex<AppState>>, band: String, band_enum: Bands) -> Result<(), Box< dyn std::error::Error>> {
+fn recall_handler (state: Arc<Mutex<AppState>>, band: String, band_enum: Bands, require_stored: bool) -> Result<(), Box< dyn std::error::Error>> {
     let mut state_lck = state.lock().unwrap();
+    if require_stored {
+        if state_lck
+            .mem_valid
+            .get(&band)
+            .copied()
+            .unwrap_or(false)
+            == false
+        {
+            state_lck.status = format!("No stored settings for {} band", band);
+            return Err(Box::new(Error::new(std::io::ErrorKind::Other, "Band not stored")));
+        }
+    }
     if let Some(_) = state_lck.enc {
         state_lck.band = band_enum;
         state_lck.sw_pos = None;
@@ -1056,6 +1236,7 @@ fn store_handler(state: Arc<Mutex<AppState>>, band: String) {
         let pos = stepper.pos.load(Ordering::Relaxed);
         stepper.mem.entry(value).and_modify(|v| v.store(pos,Ordering::Relaxed));
     }
+    state_lck.mem_valid.insert(band.clone(), true);
     state_lck.status = format!("Stored {} Band", band);
 
 }
@@ -1074,13 +1255,20 @@ fn sleep_save(state: Arc<Mutex<AppState>>) {
         let _ = fs::File::create(&full_path);
     }
     let mut saved_state = StoredData::new();
-    saved_state.enc.entry("PinA".to_string()).insert_entry(state_lck.clone().enc.unwrap().pin_a as u32);
-    saved_state.enc.entry("PinB".to_string()).insert_entry(state_lck.clone().enc.unwrap().pin_b as u32);
+    if let Some(enc) = state_lck.clone().enc {
+        saved_state.enc.entry("PinA".to_string()).insert_entry(enc.pin_a as u32);
+        saved_state.enc.entry("PinB".to_string()).insert_entry(enc.pin_b as u32);
+    } else {
+        state_lck.status = "Encoder not configured; skipping encoder save".to_string();
+    }
     saved_state.mem.entry("tune".to_string()).insert_entry(store_data_creator(&mut state_lck.clone(), &mut saved_state.tune, |x| x.tune.clone()));
     saved_state.mem.entry("ind".to_string()).insert_entry(store_data_creator(&mut state_lck.clone(), &mut saved_state.ind, |x| x.ind.clone()));
     saved_state.mem.entry("load".to_string()).insert_entry(store_data_creator(&mut state_lck.clone(), &mut saved_state.load, |x| x.load.clone()));
     saved_state.band = state_lck.band.clone();
     saved_state.call_sign = state_lck.call_sign.clone();
+    saved_state.mem_valid = state_lck.mem_valid.clone();
+    saved_state.tci_server = state_lck.tci_server.clone();
+    saved_state.follow_me = state_lck.follow_me;
     println!("Attempting to save data");
     if let Ok(output_data) = serde_json::to_string_pretty(&saved_state) {
         println!("Saving file to {}", full_path.to_string_lossy().to_string());
@@ -1120,6 +1308,112 @@ where
     temp_mem_data
     
     }
+
+fn default_profile_path() -> PathBuf {
+    env::current_dir()
+        .unwrap()
+        .join("static")
+        .join("default_profile.txt")
+}
+
+fn read_default_profile_name() -> Option<String> {
+    let path = default_profile_path();
+    if let Ok(contents) = fs::read_to_string(path) {
+        let name = contents.trim().to_string();
+        if !name.is_empty() {
+            return Some(name);
+        }
+    }
+    None
+}
+
+fn write_default_profile_name(file_name: &str) -> Result<(), std::io::Error> {
+    fs::write(default_profile_path(), format!("{}\n", file_name))
+}
+
+fn load_profile_from_file(state: Arc<Mutex<AppState>>, file_name: &str) -> Result<(), String> {
+    let full_path = env::current_dir()
+        .map_err(|e| e.to_string())?
+        .join("static")
+        .join(file_name);
+    let file_data = fs::read_to_string(full_path).map_err(|e| e.to_string())?;
+    let output: StoredData = serde_json::from_str(&file_data).map_err(|e| e.to_string())?;
+    apply_profile_to_state(state, file_name, output);
+    Ok(())
+}
+
+fn apply_profile_to_state(state: Arc<Mutex<AppState>>, file_name: &str, output: StoredData) {
+    let mut state_lck = state.lock().unwrap();
+    state_lck.file = file_name.to_string();
+    let mut my_stepper_arr = [
+        state_lck.tune.clone(),
+        state_lck.ind.clone(),
+        state_lck.load.clone(),
+    ];
+    let bands = ["10M", "11M", "15M", "20M", "40M", "80M"];
+    let my_output_arr = [&output.tune, &output.ind, &output.load];
+    for (i, stepper) in my_stepper_arr.iter_mut().enumerate() {
+        let name = &stepper.lock().unwrap().name.clone();
+        if stepper.lock().unwrap().pin_a.unwrap_or(0u8) != 0 {
+            handle_stepper(&mut state_lck, HashMap::new(), name, false, |x| stepper.clone());
+        }
+        thread::sleep(Duration::from_millis(10));
+        stepper.lock().unwrap().pin_a = if my_output_arr[i].contains_key("PinA") {Some(*my_output_arr[i].get("PinA").unwrap() as u8)} else {None};
+        stepper.lock().unwrap().pin_b = if my_output_arr[i].contains_key("PinB") {Some(*my_output_arr[i].get("PinB").unwrap() as u8)} else {None};
+        stepper.lock().unwrap().ena = if my_output_arr[i].contains_key("ena") {Some(*my_output_arr[i].get("ena").unwrap() as u8)} else {None};
+        stepper.lock().unwrap().max.store(*my_output_arr[i].get("max").unwrap() as i32, Ordering::Relaxed);
+        stepper.lock().unwrap().pos.store(*my_output_arr[i].get("pos").unwrap() as i32, Ordering::Relaxed);
+        stepper.lock().unwrap().ratio = *my_output_arr[i].get("ratio").unwrap() as u8;
+        let mut stepper_lck = stepper.lock().unwrap();
+        if stepper_lck.name == "ind" {
+            println!("Inductor set to lower speed");
+            stepper_lck.speed = Duration::from_micros(400);
+        }
+        if let Some(_) = stepper_lck.pin_a {
+            stepper_lck.run_2();
+        }
+        drop(stepper_lck);
+        for band in bands {
+            let mut stepper_lck = stepper.lock().unwrap();
+            let value = *output.mem.get(&stepper_lck.name).unwrap().get(&band.to_string()).unwrap_or(&0) as i32;
+            stepper_lck.mem.entry(band.to_string()).and_modify(|v| v.store(value, Ordering::Relaxed));
+        }
+    }
+    state_lck.enc = if output.enc.contains_key("PinA") && output.enc.contains_key("PinB") {
+        if let Some(enc) = &state_lck.enc {
+            *enc.stop.lock().unwrap() = true;
+            println!("Deconfiguring Encoder to load new config");
+        }
+        Some(Encoder::new(
+            *output.enc.get("PinA").unwrap() as u8,
+            *output.enc.get("PinB").unwrap() as u8,
+        ))
+    } else {
+        None
+    };
+    if let Some(mut enc) = state_lck.enc.clone() {
+        let _ = enc.run();
+    }
+    state_lck.band = output.band;
+    state_lck.call_sign = output.call_sign;
+    let mut derived: HashMap<String, bool> = HashMap::new();
+    for band in ["10M", "11M", "15M", "20M", "40M", "80M"] {
+        let has_key =
+            output.mem.get("tune").and_then(|m| m.get(band)).is_some()
+            || output.mem.get("ind").and_then(|m| m.get(band)).is_some()
+            || output.mem.get("load").and_then(|m| m.get(band)).is_some();
+        let file_flag = output.mem_valid.get(band).copied().unwrap_or(false);
+        derived.insert(band.to_string(), has_key || file_flag);
+    }
+    state_lck.mem_valid = derived;
+    for key in ["10M", "11M", "15M", "20M", "40M", "80M"] {
+        state_lck.mem_valid.entry(key.to_string()).or_insert(false);
+    }
+    if !output.tci_server.is_empty() {
+        state_lck.tci_server = output.tci_server;
+    }
+    state_lck.follow_me = output.follow_me;
+}
 
 async fn read_html_from_file<P: AsRef<path::Path>>(path: P) -> Result<String, std::io::Error> {
     let mut file = File::open(path).await?;

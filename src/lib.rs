@@ -138,6 +138,7 @@ pub mod stepper {
                 mem: HashMap::from([
                     ("10M".to_string(), Arc::new(AtomicI32::new(0))),
                     ("11M".to_string(), Arc::new(AtomicI32::new(0))),
+                    ("15M".to_string(), Arc::new(AtomicI32::new(0))),
                     ("20M".to_string(), Arc::new(AtomicI32::new(0))),
                     ("40M".to_string(), Arc::new(AtomicI32::new(0))),
                     ("80M".to_string(), Arc::new(AtomicI32::new(0))),

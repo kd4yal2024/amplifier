@@ -8,6 +8,16 @@
 
   <!-- Scoped config-page polish (won't mess with main UI) -->
   <style>
+    :root {
+      --cfg-bg: #f4f7fb;
+      --cfg-panel: #ffffff;
+      --cfg-panel-2: #f8fafc;
+      --cfg-text: #0f172a;
+      --cfg-muted: #556070;
+      --cfg-border: #d7dde6;
+      --cfg-accent: #1e88e5;
+    }
+    body { background: var(--cfg-bg); color: var(--cfg-text); }
     .cfg-page {
       min-height: 100vh;
       display: flex;
@@ -17,10 +27,10 @@
     }
     .cfg-card {
       width: min(980px, 100%);
-      background: #fff;
-      border: 1px solid rgba(0,0,0,0.12);
-      border-radius: 14px;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.10);
+      background: var(--cfg-panel);
+      border: 1px solid var(--cfg-border);
+      border-radius: 16px;
+      box-shadow: 0 16px 40px rgba(15, 23, 42, 0.12);
       padding: 18px 18px 22px;
     }
     .cfg-title {
@@ -29,11 +39,11 @@
       justify-content: space-between;
       gap: 12px;
       padding: 10px 12px 16px;
-      border-bottom: 1px solid rgba(0,0,0,0.10);
+      border-bottom: 1px solid var(--cfg-border);
       margin-bottom: 14px;
     }
-    .cfg-title h2 { margin: 0; font-family: Arial, sans-serif; }
-    .cfg-note { margin: 0; color: #444; font-family: Arial, sans-serif; }
+    .cfg-title h2 { margin: 0; font-family: "Sora","Space Grotesk","Rajdhani",sans-serif; }
+    .cfg-note { margin: 0; color: var(--cfg-muted); font-family: "Sora","Space Grotesk","Rajdhani",sans-serif; }
     .cfg-row {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -43,27 +53,32 @@
     @media (max-width: 800px) { .cfg-row { grid-template-columns: 1fr; } }
 
     .cfg-block {
-      border: 1px solid rgba(0,0,0,0.10);
-      border-radius: 12px;
+      border: 1px solid var(--cfg-border);
+      border-radius: 14px;
       padding: 12px;
-      background: rgba(0,0,0,0.02);
+      background: var(--cfg-panel-2);
     }
     .cfg-block h3 {
       margin: 0 0 10px;
-      font-family: Arial, sans-serif;
+      font-family: "Sora","Space Grotesk","Rajdhani",sans-serif;
       font-size: 16px;
     }
     .cfg-block label, .cfg-block p {
-      font-family: Arial, sans-serif;
+      font-family: "Sora","Space Grotesk","Rajdhani",sans-serif;
       font-size: 14px;
+      color: var(--cfg-muted);
     }
     .cfg-block select, .cfg-block input[type="text"] {
-  display: block;
-  width: 100%;
-  max-width: 260px;
-  padding: 6px;
-  margin: 6px 0 10px;
-}
+      display: block;
+      width: 100%;
+      max-width: 260px;
+      padding: 8px 10px;
+      margin: 6px 0 10px;
+      background: #ffffff;
+      color: var(--cfg-text);
+      border: 1px solid var(--cfg-border);
+      border-radius: 10px;
+    }
 
     .cfg-actions {
       display: flex;
@@ -72,7 +87,6 @@
       margin-top: 8px;
     }
 
-    /* Make disabled buttons obvious but still consistent */
     .button:disabled {
       opacity: 0.45;
       cursor: not-allowed;
@@ -82,10 +96,11 @@
     .cfg-status {
       margin-top: 14px;
       padding: 10px 12px;
-      border: 1px solid rgba(0,0,0,0.10);
+      border: 1px solid var(--cfg-border);
       border-radius: 12px;
-      background: rgba(0,0,0,0.03);
-      font-family: Arial, sans-serif;
+      background: #ffffff;
+      font-family: "Sora","Space Grotesk","Rajdhani",sans-serif;
+      color: var(--cfg-text);
     }
   </style>
 </head>
@@ -280,10 +295,43 @@
             <option value="{{file}}">{{file}}</option>
             {% endfor %}
           </select>
+          <label>
+            <input type="checkbox" name="default_profile" value="on" />
+            Set as default on startup
+          </label>
+          {% if default_profile != "" %}
+          <p>Current default: {{ default_profile }}</p>
+          {% endif %}
           <div class="cfg-actions">
             <input name="load" type="submit" value="Load">
           </div>
         </form>
+      </div>
+
+      <div class="cfg-block">
+        <h3>Follow Me (TCI)</h3>
+        <form action="/config" method="post" enctype="multipart/form-data">
+          <label for="tci_server">TCI Server (ws://host:port)</label>
+          <input
+            type="text"
+            id="tci_server"
+            name="tci_server"
+            placeholder="e.g. ws://192.168.0.108:50001"
+            pattern="wss?://.+"
+            title="Enter a ws:// or wss:// URL"
+            value="{{ tci_server }}"
+          />
+          <label>
+            <input type="hidden" name="follow_me" value="off" />
+            <input type="checkbox" name="follow_me" value="on" {% if follow_me %}checked{% endif %} />
+            Enable Follow Me
+          </label>
+          <div class="cfg-actions">
+            <input name="save_tci" type="submit" value="Save TCI Settings" />
+          </div>
+        </form>
+        <p>TCI Status: <strong>{{ tci_status }}</strong></p>
+        <p>When enabled, band changes from the radio will auto‑recall the stored band.</p>
       </div>
 
       <div class="cfg-block">

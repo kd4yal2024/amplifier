@@ -12,6 +12,12 @@
 static/skin.css
 static/ui-polish.css
 
+# build artifacts
+/tci-client/target
+
+# runtime defaults
+/static/default_profile.txt
+
 # editor/backup junk
 *.bak
 *.bak.*

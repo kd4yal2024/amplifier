@@ -31,6 +31,27 @@ if (headerCall) {
     call_sign.style.display = "none";  // keep table layout stable
 }
 
+const headerTci = document.getElementById("header_tci");
+const themeToggle = document.getElementById("theme_toggle");
+
+function applyTheme(theme) {
+    document.documentElement.setAttribute("data-theme", theme);
+    if (themeToggle) {
+        themeToggle.textContent = theme === "dark" ? "☀️" : "🌙";
+    }
+}
+
+const savedTheme = localStorage.getItem("theme") || "light";
+applyTheme(savedTheme);
+
+if (themeToggle) {
+    themeToggle.addEventListener("click", () => {
+        const next = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
+        localStorage.setItem("theme", next);
+        applyTheme(next);
+    });
+}
+
 bar_meters.appendChild(bar_meter_tune);
 bar_meters.appendChild(bar_meter_ind);
 bar_meters.appendChild(bar_meter_load);
@@ -70,7 +91,7 @@ const indBtn = document.getElementById("ind_button");
 const loadBtn = document.getElementById("load_button");
 const bandSelectors = document.getElementById("band_selectors");
     bandSelectors.replaceChildren();
-const bands = ["M10", "M11", "M20", "M40", "M80"];
+const bands = ["M10", "M11", "M15", "M20", "M40", "M80"];
 bands.forEach((band, i) => {
     console.log(band);
     console.log(i);
@@ -216,7 +237,14 @@ myButtons.forEach((button, i) => {
         event.target.classList.remove("mouseover");
     });
 });
-let gauges = document.querySelectorAll(".gauge");
+const plateVolts = document.getElementById("plate_volts");
+const plateAmps = document.getElementById("plate_amps");
+const screenAmps = document.getElementById("screen_amps");
+const gridAmps = document.getElementById("grid_amps");
+const plateVoltsBar = document.getElementById("plate_volts_bar");
+const plateAmpsBar = document.getElementById("plate_amps_bar");
+const screenAmpsBar = document.getElementById("screen_amps_bar");
+const gridAmpsBar = document.getElementById("grid_amps_bar");
 console.log(Date.now());
 learn_update.onmessage = (e) => {
     if (e.data == "close") {
@@ -232,6 +260,10 @@ learn_update.onmessage = (e) => {
         temperature_data.innerText = "Temp:" +  Math.round(meter_values.temperature) + " C";
         clock_data.innerText = meter_values.time;
         call_sign_data.innerText = meter_values.call_sign;
+        if (headerTci) {
+            const tci = (meter_values.tci_status || "DISCONNECTED").toUpperCase();
+            headerTci.textContent = `TCI: ${tci}`;
+        }
         bar_meter_tune.innerHTML =
             "<p>Current value = " +
             meter_values.tune +
@@ -369,8 +401,9 @@ setTimeout(startMeterAnimation, 1000);
 function startMeterAnimation() {
     setInterval(() => {
 
-          if (!meter_values || !meter_values.ratio) { return; }
-meterReadingElement_tune.innerText = displayReading(
+        if (!meter_values || !meter_values.ratio) { return; }
+
+        meterReadingElement_tune.innerText = displayReading(
             meter_values.tune,
             meter_values.ratio.tune,
         )[0];
@@ -385,37 +418,19 @@ meterReadingElement_tune.innerText = displayReading(
             meter_values.ratio.load,
         )[0];
         meter_load.style.background = `conic-gradient(${"#0f0"} ${displayReading(meter_values.load, meter_values.ratio.load)[1] * 0.9}deg, #fff 0deg)`;
-        gauges.forEach((gauge, i) => {
-            switch (i) {
-                case 0:
-                    gauge.style.setProperty(
-                        "--value",
-                        meter_values.plate_v / 10000,
-                    );
-                    gauge.innerHTML = Math.round(meter_values.plate_v) + "V";
-                    break;
-                case 1:
-                    gauge.style.setProperty(
-                        "--value",
-                        meter_values.plate_a / 3,
-                    );
-                    gauge.innerHTML = Math.round(meter_values.plate_a) + "A";
-                    break;
-                case 2:
-                    gauge.style.setProperty(
-                        "--value",
-                        meter_values.screen_a / 200,
-                    );
-                    gauge.innerHTML = Math.round(meter_values.screen_a) + "mA";
-                    break;
-                case 3:
-                    gauge.style.setProperty(
-                        "--value",
-                        meter_values.grid_a / 50,
-                    );
-                    gauge.innerHTML = Math.round(meter_values.grid_a) + "mA";
-                    break;
-            }
-        });
+        if (plateVolts) plateVolts.textContent = Math.round(meter_values.plate_v) + "V";
+        if (plateAmps) plateAmps.textContent = Math.round(meter_values.plate_a) + "A";
+        if (screenAmps) screenAmps.textContent = Math.round(meter_values.screen_a) + "mA";
+        if (gridAmps) gridAmps.textContent = Math.round(meter_values.grid_a) + "mA";
+
+        const pvPct = Math.min(100, Math.max(0, (meter_values.plate_v / 10000) * 100));
+        const paPct = Math.min(100, Math.max(0, (meter_values.plate_a / 3) * 100));
+        const saPct = Math.min(100, Math.max(0, (meter_values.screen_a / 200) * 100));
+        const gaPct = Math.min(100, Math.max(0, (meter_values.grid_a / 50) * 100));
+
+        if (plateVoltsBar) plateVoltsBar.style.width = `${pvPct}%`;
+        if (plateAmpsBar) plateAmpsBar.style.width = `${paPct}%`;
+        if (screenAmpsBar) screenAmpsBar.style.width = `${saPct}%`;
+        if (gridAmpsBar) gridAmpsBar.style.width = `${gaPct}%`;
     }, 10);
 }

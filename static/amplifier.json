@@ -1,48 +1,56 @@
 {
   "tune": {
+    "ratio": 1,
+    "max": 100000,
+    "pos": 0
+  },
+  "ind": {
     "pos": 0,
     "ratio": 1,
     "max": 100000
   },
-  "ind": {
-    "PinB": 6,
-    "pos": 0,
-    "PinA": 5,
-    "max": 100000,
-    "ratio": 3
-  },
   "load": {
-    "pos": 0,
+    "ratio": 1,
     "max": 100000,
-    "ratio": 1
+    "pos": 0
   },
-  "enc": {
-    "PinA": 24,
-    "PinB": 23
-  },
+  "enc": {},
   "mem": {
     "tune": {
+      "20M": 0,
+      "15M": 0,
       "10M": 0,
-      "80M": 0,
-      "11M": 0,
       "40M": 0,
-      "20M": 0
+      "80M": 0,
+      "11M": 0
+    },
+    "ind": {
+      "80M": 0,
+      "15M": 0,
+      "11M": 0,
+      "10M": 0,
+      "20M": 0,
+      "40M": 0
     },
     "load": {
       "10M": 0,
-      "11M": 0,
+      "15M": 0,
       "40M": 0,
       "80M": 0,
-      "20M": 0
-    },
-    "ind": {
-      "20M": 0,
-      "40M": 0,
-      "10M": 0,
       "11M": 0,
-      "80M": 0
+      "20M": 0
     }
   },
   "band": "M10",
-  "call_sign": "NB785"
+  "call_sign": "KD4YAL",
+  "mem_valid": {
+    "11M": false,
+    "20M": false,
+    "80M": false,
+    "10M": false,
+    "15M": false,
+    "40M": false
+  },
+  "tci_server": "ws://192.168.0.108:50001",
+  "follow_me": false
 }
