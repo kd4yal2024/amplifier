@@ -276,7 +276,8 @@ meter::-webkit-meter-even-less-good-value { background: linear-gradient(90deg, #
 
 /* ===== Buttons ===== */
 .button,
-.theme-toggle {
+.theme-toggle,
+.meter-toggle {
   background: linear-gradient(180deg, #ffffff, #f1f5f9);
   border: 1px solid var(--border);
   padding: 0.85rem 1rem;
@@ -300,7 +301,8 @@ meter::-webkit-meter-even-less-good-value { background: linear-gradient(90deg, #
 }
 
 .button:hover,
-.theme-toggle:hover {
+.theme-toggle:hover,
+.meter-toggle:hover {
   transform: translateY(-1px);
   box-shadow: 0 16px 30px rgba(15, 23, 42, 0.12);
   border-color: #7dd3fc;
@@ -325,6 +327,118 @@ meter::-webkit-meter-even-less-good-value { background: linear-gradient(90deg, #
 }
 
 .disabled { cursor: auto; color: #9aa3b2; }
+
+#meter_toggle {
+  width: 40px;
+  min-height: 40px;
+  padding: 0;
+  border-radius: 999px;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.meter-digital {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.meter-analog {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+body[data-meter="analog"] .meter-digital {
+  display: none;
+}
+
+body[data-meter="analog"] .meter-analog {
+  display: flex;
+}
+
+.analog-label {
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.analog-gauge {
+  position: relative;
+  width: 160px;
+  height: 110px;
+  overflow: hidden;
+}
+
+.analog-scale {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.analog-arc {
+  fill: none;
+  stroke: rgba(15, 23, 42, 0.2);
+  stroke-width: 8;
+  stroke-linecap: round;
+}
+
+.analog-ticks {
+  display: none;
+}
+
+line.analog-tick {
+  stroke: rgba(15, 23, 42, 0.9);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+line.analog-tick.major {
+  stroke-width: 4;
+}
+
+body[data-theme="dark"] .analog-arc {
+  stroke: rgba(226, 232, 240, 0.15);
+}
+
+body[data-theme="dark"] line.analog-tick {
+  stroke: rgba(226, 232, 240, 0.9);
+}
+
+.analog-needle {
+  position: absolute;
+  width: 3px;
+  height: 78px;
+  background: linear-gradient(180deg, #0f172a, #0ea5e9);
+  left: 50%;
+  bottom: 0;
+  transform-origin: bottom center;
+  transform: translateX(-50%) rotate(-90deg);
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.6);
+  z-index: 3;
+}
+
+.analog-center {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #0f172a;
+  border: 2px solid #94a3b8;
+  left: 50%;
+  bottom: 0;
+  transform: translate(-50%, 50%);
+  z-index: 4;
+}
+
+.analog-readout {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text);
+}
 
 /* ===== Gauges ===== */
 .gauge {

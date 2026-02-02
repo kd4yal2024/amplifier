@@ -34,6 +34,50 @@ if (headerCall) {
 const headerTci = document.getElementById("header_tci");
 const headerCat = document.getElementById("header_cat");
 const themeToggle = document.getElementById("theme_toggle");
+const meterToggle = document.getElementById("meter_toggle");
+
+function buildAnalogTicks() {
+    const svgs = document.querySelectorAll(".analog-scale");
+    svgs.forEach((svg) => {
+        const existing = svg.querySelector(".analog-ticks-lines");
+        if (existing) {
+            existing.remove();
+        }
+        const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+        g.setAttribute("class", "analog-ticks-lines");
+        const cx = 100;
+        const cy = 120;
+        const rOuter = 80;
+        const rInner = 68;
+        const rMajor = 62;
+        const tickCount = 21;
+        for (let i = 0; i < tickCount; i++) {
+            const pct = i / (tickCount - 1);
+            const deg = 180 + pct * 180;
+            const rad = (deg * Math.PI) / 180;
+            const cos = Math.cos(rad);
+            const sin = Math.sin(rad);
+            const inner = i % 2 === 0 ? rMajor : rInner;
+            const x1 = cx + inner * cos;
+            const y1 = cy + inner * sin;
+            const x2 = cx + rOuter * cos;
+            const y2 = cy + rOuter * sin;
+            const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+            const isMajor = i % 2 === 0;
+            line.setAttribute("class", isMajor ? "analog-tick major" : "analog-tick");
+            if (isMajor) {
+                const hue = 120 - pct * 120;
+                line.setAttribute("style", `stroke: hsl(${hue}, 70%, 45%);`);
+            }
+            line.setAttribute("x1", x1.toFixed(2));
+            line.setAttribute("y1", y1.toFixed(2));
+            line.setAttribute("x2", x2.toFixed(2));
+            line.setAttribute("y2", y2.toFixed(2));
+            g.appendChild(line);
+        }
+        svg.appendChild(g);
+    });
+}
 
 function applyTheme(theme) {
     document.documentElement.setAttribute("data-theme", theme);
@@ -42,8 +86,17 @@ function applyTheme(theme) {
     }
 }
 
+function applyMeterView(view) {
+    document.body.setAttribute("data-meter", view);
+    if (meterToggle) {
+        meterToggle.textContent = view === "analog" ? "🧭" : "📟";
+    }
+}
+
 const savedTheme = localStorage.getItem("theme") || "light";
 applyTheme(savedTheme);
+const savedMeterView = localStorage.getItem("meter_view") || "digital";
+applyMeterView(savedMeterView);
 
 if (themeToggle) {
     themeToggle.addEventListener("click", () => {
@@ -51,6 +104,21 @@ if (themeToggle) {
         localStorage.setItem("theme", next);
         applyTheme(next);
     });
+}
+
+if (meterToggle) {
+    meterToggle.addEventListener("click", () => {
+        const current = document.body.getAttribute("data-meter") || "digital";
+        const next = current === "analog" ? "digital" : "analog";
+        localStorage.setItem("meter_view", next);
+        applyMeterView(next);
+    });
+}
+
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", buildAnalogTicks);
+} else {
+    buildAnalogTicks();
 }
 
 bar_meters.appendChild(bar_meter_tune);
@@ -252,6 +320,14 @@ const plateVoltsBar = document.getElementById("plate_volts_bar");
 const plateAmpsBar = document.getElementById("plate_amps_bar");
 const screenAmpsBar = document.getElementById("screen_amps_bar");
 const gridAmpsBar = document.getElementById("grid_amps_bar");
+const plateVoltsNeedle = document.getElementById("plate_volts_needle");
+const plateAmpsNeedle = document.getElementById("plate_amps_needle");
+const screenAmpsNeedle = document.getElementById("screen_amps_needle");
+const gridAmpsNeedle = document.getElementById("grid_amps_needle");
+const plateVoltsReadout = document.getElementById("plate_volts_readout");
+const plateAmpsReadout = document.getElementById("plate_amps_readout");
+const screenAmpsReadout = document.getElementById("screen_amps_readout");
+const gridAmpsReadout = document.getElementById("grid_amps_readout");
 console.log(Date.now());
 learn_update.onmessage = (e) => {
     if (e.data == "close") {
@@ -406,6 +482,14 @@ function displayReading(val, ratio) {
     let color = setColor(meter_value);
     return [count, meter_value, color];
 }
+
+function setAnalogMeter(needle, readout, value, max, unit) {
+    if (!needle || !readout) return;
+    const pct = Math.max(0, Math.min(1, value / max));
+    const deg = -90 + pct * 180;
+    needle.style.transform = `translateX(-50%) rotate(${deg}deg)`;
+    readout.textContent = `${Math.round(value)}${unit}`;
+}
 //startMeterAnimation();
 // Function to animate the meter
 setTimeout(startMeterAnimation, 1000);
@@ -433,6 +517,11 @@ function startMeterAnimation() {
         if (plateAmps) plateAmps.textContent = Math.round(meter_values.plate_a) + "A";
         if (screenAmps) screenAmps.textContent = Math.round(meter_values.screen_a) + "mA";
         if (gridAmps) gridAmps.textContent = Math.round(meter_values.grid_a) + "mA";
+
+        setAnalogMeter(plateVoltsNeedle, plateVoltsReadout, meter_values.plate_v, 10000, "V");
+        setAnalogMeter(plateAmpsNeedle, plateAmpsReadout, meter_values.plate_a, 3, "A");
+        setAnalogMeter(screenAmpsNeedle, screenAmpsReadout, meter_values.screen_a, 200, "mA");
+        setAnalogMeter(gridAmpsNeedle, gridAmpsReadout, meter_values.grid_a, 50, "mA");
 
         const pvPct = Math.min(100, Math.max(0, (meter_values.plate_v / 10000) * 100));
         const paPct = Math.min(100, Math.max(0, (meter_values.plate_a / 3) * 100));

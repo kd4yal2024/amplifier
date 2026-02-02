@@ -1,7 +1,7 @@
 <!doctype html>
 <html>
     <head>
-        <link rel="stylesheet" href="/static/amplifier.css?v=20260201" />
+        <link rel="stylesheet" href="/static/amplifier.css?v=20260201l" />
         <link rel="stylesheet" href="/static/skin.css?v=20260201" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
     </head>
@@ -18,6 +18,7 @@
         <div class="amp-pill"><span class="amp-ico">📡</span><span id="header_callsign"></span></div>
         <div class="amp-pill"><span class="amp-ico">🛰️</span><span id="header_tci">TCI: DISCONNECTED</span></div>
         <div class="amp-pill"><span class="amp-ico">🎛️</span><span id="header_cat">CAT: DISCONNECTED</span></div>
+        <button class="meter-toggle" id="meter_toggle" type="button" aria-label="Toggle meter view">📟</button>
         <button class="theme-toggle" id="theme_toggle" type="button" aria-label="Toggle theme">🌙</button>
       </div>
     </div>
@@ -74,17 +75,45 @@
                     <div class="meter-reading" id="load">0</div>
                 </td>
                 <td>
-                    <div class="lcd-label">Plate Volts</div>
-                    <div class="lcd gauge-lcd" id="plate_volts">0V</div>
-                    <div class="mini-bar">
-                        <div class="mini-bar-fill" id="plate_volts_bar"></div>
+                    <div class="meter-digital">
+                        <div class="lcd-label">Plate Volts</div>
+                        <div class="lcd gauge-lcd" id="plate_volts">0V</div>
+                        <div class="mini-bar">
+                            <div class="mini-bar-fill" id="plate_volts_bar"></div>
+                        </div>
+                    </div>
+                    <div class="meter-analog">
+                        <div class="analog-label">Plate Volts</div>
+                        <div class="analog-gauge" id="plate_volts_gauge">
+                            <svg class="analog-scale" viewBox="0 0 200 140" aria-hidden="true">
+                                <path class="analog-arc" d="M20 120 A80 80 0 0 1 180 120" pathLength="100" />
+                                <path class="analog-ticks" d="M20 120 A80 80 0 0 1 180 120" pathLength="100" />
+                            </svg>
+                            <div class="analog-needle" id="plate_volts_needle"></div>
+                            <div class="analog-center"></div>
+                        </div>
+                        <div class="analog-readout" id="plate_volts_readout">0V</div>
                     </div>
                 </td>
                 <td>
-                    <div class="lcd-label">Plate Amps</div>
-                    <div class="lcd gauge-lcd" id="plate_amps">0A</div>
-                    <div class="mini-bar">
-                        <div class="mini-bar-fill" id="plate_amps_bar"></div>
+                    <div class="meter-digital">
+                        <div class="lcd-label">Plate Amps</div>
+                        <div class="lcd gauge-lcd" id="plate_amps">0A</div>
+                        <div class="mini-bar">
+                            <div class="mini-bar-fill" id="plate_amps_bar"></div>
+                        </div>
+                    </div>
+                    <div class="meter-analog">
+                        <div class="analog-label">Plate Amps</div>
+                        <div class="analog-gauge" id="plate_amps_gauge">
+                            <svg class="analog-scale" viewBox="0 0 200 140" aria-hidden="true">
+                                <path class="analog-arc" d="M20 120 A80 80 0 0 1 180 120" pathLength="100" />
+                                <path class="analog-ticks" d="M20 120 A80 80 0 0 1 180 120" pathLength="100" />
+                            </svg>
+                            <div class="analog-needle" id="plate_amps_needle"></div>
+                            <div class="analog-center"></div>
+                        </div>
+                        <div class="analog-readout" id="plate_amps_readout">0A</div>
                     </div>
                 </td>
             </tr>
@@ -124,17 +153,45 @@
                     </button>
                 </td>
                 <td>
-                    <div class="lcd-label">Screen Amps</div>
-                    <div class="lcd gauge-lcd" id="screen_amps">0mA</div>
-                    <div class="mini-bar">
-                        <div class="mini-bar-fill" id="screen_amps_bar"></div>
+                    <div class="meter-digital">
+                        <div class="lcd-label">Screen Amps</div>
+                        <div class="lcd gauge-lcd" id="screen_amps">0mA</div>
+                        <div class="mini-bar">
+                            <div class="mini-bar-fill" id="screen_amps_bar"></div>
+                        </div>
+                    </div>
+                    <div class="meter-analog">
+                        <div class="analog-label">Screen Amps</div>
+                        <div class="analog-gauge" id="screen_amps_gauge">
+                            <svg class="analog-scale" viewBox="0 0 200 140" aria-hidden="true">
+                                <path class="analog-arc" d="M20 120 A80 80 0 0 1 180 120" pathLength="100" />
+                                <path class="analog-ticks" d="M20 120 A80 80 0 0 1 180 120" pathLength="100" />
+                            </svg>
+                            <div class="analog-needle" id="screen_amps_needle"></div>
+                            <div class="analog-center"></div>
+                        </div>
+                        <div class="analog-readout" id="screen_amps_readout">0mA</div>
                     </div>
                 </td>
                 <td>
-                    <div class="lcd-label">Grid Amps</div>
-                    <div class="lcd gauge-lcd" id="grid_amps">0mA</div>
-                    <div class="mini-bar">
-                        <div class="mini-bar-fill" id="grid_amps_bar"></div>
+                    <div class="meter-digital">
+                        <div class="lcd-label">Grid Amps</div>
+                        <div class="lcd gauge-lcd" id="grid_amps">0mA</div>
+                        <div class="mini-bar">
+                            <div class="mini-bar-fill" id="grid_amps_bar"></div>
+                        </div>
+                    </div>
+                    <div class="meter-analog">
+                        <div class="analog-label">Grid Amps</div>
+                        <div class="analog-gauge" id="grid_amps_gauge">
+                            <svg class="analog-scale" viewBox="0 0 200 140" aria-hidden="true">
+                                <path class="analog-arc" d="M20 120 A80 80 0 0 1 180 120" pathLength="100" />
+                                <path class="analog-ticks" d="M20 120 A80 80 0 0 1 180 120" pathLength="100" />
+                            </svg>
+                            <div class="analog-needle" id="grid_amps_needle"></div>
+                            <div class="analog-center"></div>
+                        </div>
+                        <div class="analog-readout" id="grid_amps_readout">0mA</div>
                     </div>
                 </td>
             </tr>
@@ -177,5 +234,5 @@
             </button>
         </div>
     </body>
-    <script src="/static/amplifier3.js?v=20260201" type="text/javascript"></script>
+    <script src="/static/amplifier3.js?v=20260201r" type="text/javascript"></script>
 </html>
