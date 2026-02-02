@@ -343,6 +343,10 @@ async fn main() -> Result<(), std::io::Error> {
         default_profile: String::new(),
         meter_sender: None,
     }));
+    {
+        let (tx, _rx) = mpsc::channel();
+        app_state.lock().unwrap().meter_sender = Some(tx);
+    }
     if let Some(profile_name) = read_default_profile_name() {
         let _ = load_profile_from_file(app_state.clone(), &profile_name);
     }
@@ -515,14 +519,23 @@ async fn config_post(
             state.sw_pos = None;
             match form_data.get("start").unwrap().as_str() {
                 "tune" => {
+                    if let Some(tx) = state.meter_sender.clone() {
+                        let _ = tx.send(false);
+                    }
                     let state_tune = state.tune.lock().unwrap();
                     state_tune.pos.store(0, Ordering::Relaxed);
                 }
                 "ind" => {
+                    if let Some(tx) = state.meter_sender.clone() {
+                        let _ = tx.send(false);
+                    }
                     let state_ind = state.ind.lock().unwrap();
                     state_ind.pos.store(0, Ordering::Relaxed);
                 }
                 "load" => {
+                    if let Some(tx) = state.meter_sender.clone() {
+                        let _ = tx.send(false);
+                    }
                     let state_load = state.load.lock().unwrap();
                     state_load.pos.store(0, Ordering::Relaxed);
                 }
@@ -532,14 +545,23 @@ async fn config_post(
         else if form_data.contains_key("max") {
             match form_data.get("max").unwrap().as_str() {
                 "tune" => {
+                    if let Some(tx) = state.meter_sender.clone() {
+                        let _ = tx.send(false);
+                    }
                     let state_tune = state.tune.lock().unwrap();
                     state_tune.max.store(state_tune.pos.load(Ordering::Relaxed), Ordering::Relaxed);
                 }
                 "ind" => {
+                    if let Some(tx) = state.meter_sender.clone() {
+                        let _ = tx.send(false);
+                    }
                     let state_ind = state.ind.lock().unwrap();
                     state_ind.max.store(state_ind.pos.load(Ordering::Relaxed), Ordering::Relaxed);
                 }
                 "load" => {
+                    if let Some(tx) = state.meter_sender.clone() {
+                        let _ = tx.send(false);
+                    }
                     let state_load = state.load.lock().unwrap();
                     state_load.max.store(state_load.pos.load(Ordering::Relaxed), Ordering::Relaxed);
                 }
@@ -549,14 +571,23 @@ async fn config_post(
         }  else if form_data.contains_key("reset") {
             match form_data.get("reset").unwrap().as_str() {
                 "tune" => {
+                    if let Some(tx) = state.meter_sender.clone() {
+                        let _ = tx.send(false);
+                    }
                     let state_tune = state.tune.lock().unwrap();
                     state_tune.max.store(100000, Ordering::Relaxed);
                 }
                 "ind" => {
+                    if let Some(tx) = state.meter_sender.clone() {
+                        let _ = tx.send(false);
+                    }
                     let state_ind = state.ind.lock().unwrap();
                     state_ind.max.store(100000, Ordering::Relaxed);
                 }
                 "load" => {
+                    if let Some(tx) = state.meter_sender.clone() {
+                        let _ = tx.send(false);
+                    }
                     let state_load = state.load.lock().unwrap();
                     state_load.max.store(100000, Ordering::Relaxed);
                 }
@@ -1039,7 +1070,9 @@ async fn selector(
 fn selector_handler<F>(state: &mut AppState,  callback: F) -> Result<(), Box<dyn std::error::Error>>
 where F:
         Fn(&mut AppState) -> Arc<Mutex<Stepper>> {
-    let _ = state.meter_sender.clone().unwrap().send(false);
+    if let Some(tx) = state.meter_sender.clone() {
+        let _ = tx.send(false);
+    }
     let stepper = callback(state);
     if let Some(enc) = state.clone().enc {
         enc.count.store(stepper.clone().lock().unwrap().pos.load(Ordering::Relaxed), Ordering::Relaxed);
@@ -1248,7 +1281,8 @@ async fn aquire_data(state: Arc<Mutex<AppState>>) {
             if clone >= 0 {
                 match val.sw_pos {
                     Some(Select::Tune) => {
-                        if  clone < tune.max.load(Ordering::Relaxed)-1 && clone > 0 {
+                        let tune_max = tune.max.load(Ordering::Relaxed).saturating_sub(1);
+                        if  clone < tune_max && clone > 0 {
                             if let Some(_) = tune.pin_a {
                                 if let Some(ch) = tune.channel.clone() {
                                     let _ = ch.send((clone as u32, false));
@@ -1259,7 +1293,8 @@ async fn aquire_data(state: Arc<Mutex<AppState>>) {
                         }
                     }
                     Some(Select::Ind) => {
-                        if  clone < ind.max.load(Ordering::Relaxed)-1 && clone > 0 {
+                        let ind_max = ind.max.load(Ordering::Relaxed).saturating_sub(1);
+                        if  clone < ind_max && clone > 0 {
                             if let Some(_) = ind.pin_a {
                                 if let Some(ch) = ind.channel.clone() {
                                     let _ = ch.send((clone as u32, false));
@@ -1270,7 +1305,8 @@ async fn aquire_data(state: Arc<Mutex<AppState>>) {
                         }
                     }
                     Some(Select::Load) => {
-                        if  clone < load.max.load(Ordering::Relaxed)-1 && clone > 0 {
+                        let load_max = load.max.load(Ordering::Relaxed).saturating_sub(1);
+                        if  clone < load_max && clone > 0 {
                             if let Some(_) = load.pin_a {
                                 if let Some(ch) = load.channel.clone() {
                                     let _ = ch.send((clone as u32, false));
@@ -1453,7 +1489,9 @@ fn recall_handler (state: Arc<Mutex<AppState>>, band: String, band_enum: Bands, 
         }
     }
     if let Some(_) = state_lck.enc {
-        let _ = state_lck.meter_sender.clone().unwrap().send(false);
+        if let Some(tx) = state_lck.meter_sender.clone() {
+            let _ = tx.send(false);
+        }
         state_lck.pwr_btns.clone().bands.iter().for_each(|pin|{
             let _ = state_lck.pwr_btns.clone().mcp.set_pin(*pin, mcp230xx::Level::Low);
         });
@@ -1560,7 +1598,9 @@ fn sleep_save(state: Arc<Mutex<AppState>>) {
         println!("Saving file to {}", full_path.to_string_lossy().to_string());
         if let Ok(_) = fs::write(full_path, output_data) {
             state_lck.status = format!("All data successfully saved !");
-            let _ = state_lck.meter_sender.clone().unwrap().send(true);
+            if let Some(tx) = state_lck.meter_sender.clone() {
+                let _ = tx.send(true);
+            }
         }
     }
     
