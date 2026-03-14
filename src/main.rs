@@ -4,7 +4,6 @@ use amplifier::mcp::Mcp;
 use askama::Template;
 use axum::response::sse::KeepAlive;
 use mcp230xx::Mcp23017;
-use mcp230xx;
 use std::env;
 use rppal::gpio::{Gpio, OutputPin};
 use axum::response::{Html, IntoResponse, Redirect};
@@ -17,10 +16,8 @@ use axum::{
 };
 use axum_extra::TypedHeader;
 use async_stream::stream;
-use futures_util::stream::{self, Stream};
-use futures_util::StreamExt;
+use futures_util::stream::Stream;
 use serde::{Deserialize, Serialize};
-use serde_json;
 use std::collections::HashMap;
 use std::fs;
 use std::io::Error;
@@ -29,24 +26,18 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::{convert::Infallible, path::PathBuf, time::Duration};
-use tokio::sync::broadcast::{self, Sender, Receiver};
-use tokio::fs::File;
-use tokio::io::{self, AsyncReadExt};
+use tokio::sync::broadcast::{self, Sender};
 use tokio::process::Command;
 use tokio::time::{interval, sleep, timeout};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_stream::StreamExt as TokioStreamExt;
 use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use chrono;
 const ENABLE_PIN: u8 = 16;
 
 #[derive(Template)]
 #[template(path = "amplifier2.html")]
-struct IndexTemplate<'a> {
-    name: &'a str,
-}
+struct IndexTemplate {}
 #[derive(Template)]
 #[template(path = "config2.html")]
 struct ConfigTemplate {
@@ -57,15 +48,12 @@ struct ConfigTemplate {
     load: Vec<String>,
     pins: Vec<u8>,
     files: Vec<String>,
-    val: String,
     tci_server: String,
     follow_me: bool,
     tci_status: String,
     default_profile: String,
     cat_enabled: bool,
     cat_status: String,
-    rigctld_host: String,
-    rigctld_port: u16,
     rig_model_id: i32,
     rig_serial_device: String,
     rig_baud: u32,
@@ -250,6 +238,7 @@ struct Gauges {
     screen_a: u32,
     grid_a: u32,
 }
+#[allow(non_snake_case)]
 #[derive(Clone)]
 struct PwrBtns {
     Blwr: [Mcp23017; 1],
@@ -362,7 +351,13 @@ async fn main() -> Result<(), std::io::Error> {
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    let bind_addr = env::var("AMPLIFIER_BIND").unwrap_or_else(|_| "0.0.0.0:3000".to_string());
+    let listener = tokio::net::TcpListener::bind(&bind_addr)
+        .await
+        .map_err(|err| {
+            eprintln!("Failed to bind amplifier HTTP listener on {bind_addr}: {err}");
+            err
+        })?;
     tracing::debug!("listening on {}", listener.local_addr().unwrap());
     let assets_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets");
     let static_files_service = ServeDir::new(assets_dir).append_index_html_on_directories(true);
@@ -374,7 +369,7 @@ async fn main() -> Result<(), std::io::Error> {
         .route(
             "/",
             get(|| async {
-                let template = IndexTemplate { name: "Axum User" };
+                let template = IndexTemplate {};
                 Html(template.render().unwrap())
             }),
         )
@@ -472,7 +467,7 @@ async fn config_post(
         state.status = "CAT and TCI cannot both be enabled; CAT kept ON, TCI turned OFF".to_string();
     }
 
-    if let Some(_) = state.enc  {
+    if state.enc.is_some()  {
         if form_data.contains_key("del_enc") {
             let pin_a = state.enc.clone().unwrap().pin_a;
             let pin_b = state.enc.clone().unwrap().pin_b;
@@ -484,7 +479,7 @@ async fn config_post(
             
         }
         else if form_data.contains_key("add_tune") {
-            if let Some(_) = state.tune.lock().unwrap().pin_a {
+            if state.tune.lock().unwrap().pin_a.is_some() {
                 println!("PinA already initialized for Tune");
             } else {
                 handle_stepper(&mut state, form_data.clone(),  "Tune", true,|state| state.tune.clone());
@@ -495,7 +490,7 @@ async fn config_post(
             handle_stepper(&mut state, form_data.clone(),  "Tune", false, |state| state.tune.clone()); 
         }
         else if form_data.contains_key("add_ind") {
-            if let Some(_) = state.ind.lock().unwrap().pin_a {
+            if state.ind.lock().unwrap().pin_a.is_some() {
                 println!("PinA already initialized for Ind");
             } else {
                 handle_stepper(&mut state, form_data.clone(),  "Ind", true,|state| state.ind.clone()); 
@@ -505,7 +500,7 @@ async fn config_post(
             handle_stepper(&mut state, form_data.clone(),  "Ind", false ,|state| state.ind.clone()); 
         }
         else if form_data.contains_key("add_load") {
-            if let Some(_) = state.load.lock().unwrap().pin_a {
+            if state.load.lock().unwrap().pin_a.is_some() {
                 println!("PinA already initialized for Load");
             } else {
                 handle_stepper(&mut state, form_data.clone(),  "Load", true,|state| state.load.clone()); 
@@ -594,26 +589,23 @@ async fn config_post(
                 _ => println!("Invalid argument")
             }
         }
-    } else {
-        if form_data.contains_key("PinA") && form_data.contains_key("PinB") {
-                if form_data.get("PinA").unwrap() != "" && form_data.get("PinB").unwrap() != "" {
-                let pin_a = form_data.get("PinA").unwrap().parse().unwrap();
-                let pin_b = form_data.get("PinB").unwrap().parse().unwrap();
-                state.enc = Some(Encoder::new(
-                    pin_a,
-                    pin_b,
-                ));
-                let _ = state.enc.clone().unwrap().run();
-                let _ = process_pins(&mut state.gpio_pins, form_data.get("PinA").unwrap().parse().unwrap(), true);
-                let _ = process_pins(&mut state.gpio_pins, form_data.get("PinB").unwrap().parse().unwrap(), true);
-                println!("Encoder Added");
-                state.status = format!(
-                    "Encoder Added on pins: {:?}, {:?}",
-                    form_data.get("PinA").unwrap(),
-                    form_data.get("PinB").unwrap(),
-                );
-            }
-        }
+    } else if form_data.contains_key("PinA") && form_data.contains_key("PinB")
+        && form_data.get("PinA").unwrap() != "" && form_data.get("PinB").unwrap() != "" {
+        let pin_a = form_data.get("PinA").unwrap().parse().unwrap();
+        let pin_b = form_data.get("PinB").unwrap().parse().unwrap();
+        state.enc = Some(Encoder::new(
+            pin_a,
+            pin_b,
+        ));
+        let _ = state.enc.clone().unwrap().run();
+        let _ = process_pins(&mut state.gpio_pins, form_data.get("PinA").unwrap().parse().unwrap(), true);
+        let _ = process_pins(&mut state.gpio_pins, form_data.get("PinB").unwrap().parse().unwrap(), true);
+        println!("Encoder Added");
+        state.status = format!(
+            "Encoder Added on pins: {:?}, {:?}",
+            form_data.get("PinA").unwrap(),
+            form_data.get("PinB").unwrap(),
+        );
     }
     if form_data.clone().contains_key("call_sign") {
         state.call_sign = form_data.get("call_sign").unwrap().clone();
@@ -626,13 +618,13 @@ fn process_pins(pin_list: &mut Vec<u8>, val: u8, remove: bool) -> Result<(), Box
     if remove {
         if let Some(out) = pin_list.iter().position(|&x| x == val) {
             pin_list.remove(out);
-            return Ok(())
+            Ok(())
         } else {
-            return Err(Box::new(Error::new(io::ErrorKind::Other, "Pin not Found")))
+            Err(Box::new(Error::other("Pin not Found")))
         }
     } else {
         pin_list.push(val);
-        return Ok(())
+        Ok(())
     }
   
 }
@@ -644,39 +636,24 @@ async fn config_get(State(state): State<Arc<Mutex<AppState>>>) -> Html<String> {
     let ind = state.ind.lock().unwrap();
     let load = state.load.lock().unwrap();
     let template = ConfigTemplate {
-        enc: if let Some(_) = state.enc { true } else { false },
-        enc_val: if let Some(_) = state.enc {
-            vec![
-                state.enc.clone().unwrap().pin_a.to_string(),
-                state.enc.clone().unwrap().pin_b.to_string(),
-            ]
+        enc: state.enc.is_some(),
+        enc_val: if let Some(enc) = state.enc.clone() {
+            vec![enc.pin_a.to_string(), enc.pin_b.to_string()]
         } else {
             vec!["None".to_string(), "None".to_string()]
         },
-        tune: if let Some(_) = tune.pin_a {
-            vec![
-                tune.pin_a.unwrap().to_string(),
-                tune.pin_b.unwrap().to_string(),
-                tune.ratio.to_string(),
-            ]
+        tune: if let (Some(pin_a), Some(pin_b)) = (tune.pin_a, tune.pin_b) {
+            vec![pin_a.to_string(), pin_b.to_string(), tune.ratio.to_string()]
         } else {
             vec!["None".to_string(), "None".to_string(), 1.to_string()]
         },
-        ind: if let Some(_) = ind.pin_a {
-            vec![
-                ind.pin_a.unwrap().to_string(),
-                ind.pin_b.unwrap().to_string(),
-                ind.ratio.to_string(),
-            ]
+        ind: if let (Some(pin_a), Some(pin_b)) = (ind.pin_a, ind.pin_b) {
+            vec![pin_a.to_string(), pin_b.to_string(), ind.ratio.to_string()]
         } else {
             vec!["None".to_string(), "None".to_string(), 1.to_string()]
         },
-        load: if let Some(_) = load.pin_a {
-            vec![
-                load.pin_a.unwrap().to_string(),
-                load.pin_b.unwrap().to_string(),
-                load.ratio.to_string(),
-            ]
+        load: if let (Some(pin_a), Some(pin_b)) = (load.pin_a, load.pin_b) {
+            vec![pin_a.to_string(), pin_b.to_string(), load.ratio.to_string()]
         } else {
             vec!["None".to_string(), "None".to_string(), 1.to_string()]
         },
@@ -690,10 +667,10 @@ async fn config_get(State(state): State<Arc<Mutex<AppState>>>) -> Html<String> {
                 if temp_file.ends_with("json") {
                     output.push(temp_file);
                 }
-            }); 
+            });
+            output.sort_unstable();
             output
         },
-        val: "TEST".to_string(),
         pins: state.gpio_pins.clone(),
         tci_server: state.tci_server.clone(),
         follow_me: state.follow_me,
@@ -701,8 +678,6 @@ async fn config_get(State(state): State<Arc<Mutex<AppState>>>) -> Html<String> {
         default_profile: state.default_profile.clone(),
         cat_enabled: state.cat_enabled,
         cat_status: state.cat_status.clone(),
-        rigctld_host: state.rigctld_host.clone(),
-        rigctld_port: state.rigctld_port,
         rig_model_id: state.rig_model_id,
         rig_serial_device: state.rig_serial_device.clone(),
         rig_baud: state.rig_baud,
@@ -727,7 +702,7 @@ async fn sse_handler(
 }
 
 fn split_frames(s: &str) -> impl Iterator<Item = &str> {
-    s.split(|c| c == ';' || c == '\n' || c == '\r')
+    s.split([';', '\n', '\r'])
         .map(str::trim)
         .filter(|f| !f.is_empty())
 }
@@ -773,7 +748,6 @@ fn band_to_key(band: &Bands) -> &'static str {
 }
 
 async fn tci_follow_task(state: Arc<Mutex<AppState>>) {
-    let mut active_server = String::new();
     loop {
         let (server, enabled, cat_enabled) = {
             let state_lck = state.lock().unwrap();
@@ -798,29 +772,28 @@ async fn tci_follow_task(state: Arc<Mutex<AppState>>) {
             continue;
         }
 
-        active_server = server.clone();
         {
             let mut state_lck = state.lock().unwrap();
             state_lck.tci_status = "CONNECTING".to_string();
-            state_lck.status = format!("TCI connecting: {}", active_server);
+            state_lck.status = format!("TCI connecting: {}", server);
         }
-        println!("TCI: connecting to {}", active_server);
-        match connect_async(active_server.as_str()).await {
+        println!("TCI: connecting to {}", server);
+        match connect_async(server.as_str()).await {
             Ok((mut ws, _)) => {
                 {
                     let mut state_lck = state.lock().unwrap();
                     state_lck.tci_status = "CONNECTED".to_string();
-                    state_lck.status = format!("TCI connected: {}", active_server);
+                    state_lck.status = format!("TCI connected: {}", server);
                 }
-                println!("TCI: connected to {}", active_server);
+                println!("TCI: connected to {}", server);
                 loop {
                     tokio::select! {
                         msg = futures_util::StreamExt::next(&mut ws) => {
                             match msg {
                                 Some(Ok(Message::Text(s))) => {
                                     for frame in split_frames(&s) {
-                                        if let Some(hz) = parse_any_tx_hz(frame) {
-                                            if let Some(band) = band_from_hz(hz) {
+                                        if let Some(hz) = parse_any_tx_hz(frame)
+                                            && let Some(band) = band_from_hz(hz) {
                                                 println!("TCI: band {} at {} Hz", band_to_key(&band), hz);
                                                 {
                                                     let mut state_lck = state.lock().unwrap();
@@ -832,9 +805,10 @@ async fn tci_follow_task(state: Arc<Mutex<AppState>>) {
                                                 }
                                                 let maybe_recall = {
                                                     let mut state_lck = state.lock().unwrap();
-                                                    if !state_lck.follow_me || state_lck.tci_server != active_server {
-                                                        None
-                                                    } else if state_lck.last_tci_band == Some(band.clone()) {
+                                                    if !state_lck.follow_me
+                                                        || state_lck.tci_server != server
+                                                        || state_lck.last_tci_band == Some(band.clone())
+                                                    {
                                                         None
                                                     } else {
                                                         state_lck.last_tci_band = Some(band.clone());
@@ -859,7 +833,6 @@ async fn tci_follow_task(state: Arc<Mutex<AppState>>) {
                                                     }
                                                 }
                                             }
-                                        }
                                     }
                                 }
                                 Some(Ok(Message::Close(_))) | None => break,
@@ -868,7 +841,7 @@ async fn tci_follow_task(state: Arc<Mutex<AppState>>) {
                         }
                         _ = sleep(Duration::from_millis(250)) => {
                             let state_lck = state.lock().unwrap();
-                            if !state_lck.follow_me || state_lck.tci_server != active_server {
+                            if !state_lck.follow_me || state_lck.tci_server != server {
                                 break;
                             }
                         }
@@ -876,15 +849,15 @@ async fn tci_follow_task(state: Arc<Mutex<AppState>>) {
                 }
                 let mut state_lck = state.lock().unwrap();
                 state_lck.tci_status = "DISCONNECTED".to_string();
-                state_lck.status = format!("TCI disconnected: {}", active_server);
+                state_lck.status = format!("TCI disconnected: {}", server);
             }
             Err(_) => {
                 {
                     let mut state_lck = state.lock().unwrap();
-                    state_lck.status = format!("TCI connect failed: {}", active_server);
+                    state_lck.status = format!("TCI connect failed: {}", server);
                     state_lck.tci_status = "ERROR".to_string();
                 }
-                println!("TCI: connect failed to {}", active_server);
+                println!("TCI: connect failed to {}", server);
                 sleep(Duration::from_secs(2)).await;
             }
         }
@@ -965,9 +938,9 @@ async fn cat_follow_task(state: Arc<Mutex<AppState>>) {
                             if !cat_connected {
                                 state_lck.cat_status = "CONNECTED".to_string();
                             }
-                            if !state_lck.cat_enabled {
-                                None
-                            } else if state_lck.last_cat_band == Some(band.clone()) {
+                            if !state_lck.cat_enabled
+                                || state_lck.last_cat_band == Some(band.clone())
+                            {
                                 None
                             } else {
                                 state_lck.last_cat_band = Some(band.clone());
@@ -984,12 +957,11 @@ async fn cat_follow_task(state: Arc<Mutex<AppState>>) {
                                 }
                             }
                         };
-                        if let Some((band_enum, band_key)) = maybe_recall {
-                            if let Err(e) = recall_handler(state.clone(), band_key.to_string(), band_enum, true) {
+                        if let Some((band_enum, band_key)) = maybe_recall
+                            && let Err(e) = recall_handler(state.clone(), band_key.to_string(), band_enum, true) {
                                 let mut state_lck = state.lock().unwrap();
                                 state_lck.status = format!("CAT recall {} failed: {}", band_key, e);
                             }
-                        }
                     }
                     cat_connected = true;
                 } else {
@@ -1028,20 +1000,20 @@ async fn selector(
     let tune = state_lck.tune.lock().unwrap().clone();
     let ind = state_lck.ind.lock().unwrap().clone();
     let load = state_lck.load.lock().unwrap().clone();
-    if  *tune.operate.lock().unwrap() == false && *ind.operate.lock().unwrap() == false && *load.operate.lock().unwrap() == false {
+    if  !*tune.operate.lock().unwrap() && !*ind.operate.lock().unwrap() && !*load.operate.lock().unwrap() {
         while let Some(val) = form_data.next_field().await.unwrap() {
-            println!("Name: {}", val.name().unwrap().to_string());
+            println!("Name: {}", val.name().unwrap());
             match val.name().unwrap() {
                 "tune" => {
                     let mut state = app_state.lock().unwrap();
-                    if let Ok(_) = selector_handler(&mut state, |x| x.tune.clone()) {
+                    if selector_handler(&mut state, |x| x.tune.clone()).is_ok() {
                         state.status = "Tune is selected".to_string();
                         state.sw_pos = Some(Select::Tune);
                     }
                 }
                 "ind" => {
                     let mut state = app_state.lock().unwrap();
-                    if let Ok(_) = selector_handler(&mut state, |x| x.ind.clone()) {
+                    if selector_handler(&mut state, |x| x.ind.clone()).is_ok() {
                         state.status = "Ind is selected".to_string();
                         state.sw_pos = Some(Select::Ind);
                         
@@ -1050,7 +1022,7 @@ async fn selector(
                 }
                 "load" => {
                     let mut state = app_state.lock().unwrap();
-                    if let Ok(_) = selector_handler(&mut state, |x| x.load.clone()) {
+                    if selector_handler(&mut state, |x| x.load.clone()).is_ok() {
                         state.status = "Load is selected".to_string();
                         state.sw_pos = Some(Select::Load);
                     }
@@ -1062,7 +1034,7 @@ async fn selector(
             }
         }
     } else {
-        app_state.lock().unwrap().status = format!("Cannot select a tuner while tune is in progress ! ! !");
+        app_state.lock().unwrap().status = "Cannot select a tuner while tune is in progress ! ! !".to_string();
     }
     StatusCode::OK
 }
@@ -1076,10 +1048,10 @@ where F:
     let stepper = callback(state);
     if let Some(enc) = state.clone().enc {
         enc.count.store(stepper.clone().lock().unwrap().pos.load(Ordering::Relaxed), Ordering::Relaxed);
-        return Ok(())
+        Ok(())
     } else {
-        state.status = format!("No Encoder present! ! !");
-        Err(Box::new(Error::new(std::io::ErrorKind::Other, "No Encoder Forund")))
+        state.status = "No Encoder present! ! !".to_string();
+        Err(Box::new(Error::other("No Encoder Forund")))
         
     }
 
@@ -1088,44 +1060,33 @@ where F:
 async fn recall(Path(path): Path<String>, State(state): State<Arc<Mutex<AppState>>>) {
     println!("{}", path);
     let state_lck = state.lock().unwrap().clone();
-        if *state_lck.tune.lock().unwrap().operate.lock().unwrap() == false && *state_lck.ind.lock().unwrap().operate.lock().unwrap() == false && *state_lck.load.lock().unwrap().operate.lock().unwrap() == false  {
+        if !*state_lck.tune.lock().unwrap().operate.lock().unwrap() && !*state_lck.ind.lock().unwrap().operate.lock().unwrap() && !*state_lck.load.lock().unwrap().operate.lock().unwrap()  {
             state.lock().unwrap().sleep = true;
             match path.as_str() {
                 "M10" => {
-                    if let Ok(_) = recall_handler(state.clone(), "10M".to_string(), Bands::M10, false) {
-                        
-                    }
+                    let _ = recall_handler(state.clone(), "10M".to_string(), Bands::M10, false);
                 }
                 "M11" => {
-                    if let Ok(_) = recall_handler(state.clone(), "11M".to_string(), Bands::M11, false) {
-        
-                    }
+                    let _ = recall_handler(state.clone(), "11M".to_string(), Bands::M11, false);
                 }
                 "M15" => {
-                    if let Ok(_) = recall_handler(state.clone(), "15M".to_string(), Bands::M15, false) {
-
-                    }
+                    let _ = recall_handler(state.clone(), "15M".to_string(), Bands::M15, false);
                 }
                 "M20" => {
-                    if let Ok(_) = recall_handler(state.clone(), "20M".to_string(), Bands::M20, false) {
-            
-                    }
+                    let _ = recall_handler(state.clone(), "20M".to_string(), Bands::M20, false);
                 }
                 "M40" => {
-                    if let Ok(_) = recall_handler(state.clone(), "40M".to_string(), Bands::M40, false) {
-        
-                    }
+                    let _ = recall_handler(state.clone(), "40M".to_string(), Bands::M40, false);
                 }
                 "M80" => {
-                    if let Ok(_) = recall_handler(state.clone(), "80M".to_string(), Bands::M80, false) {
-                    }
+                    let _ = recall_handler(state.clone(), "80M".to_string(), Bands::M80, false);
                 }
                 _ => {
                     println!("Invalid band selected!!")
                 }
             }
         } else {
-        state.lock().unwrap().status = format!("Attempted to recall while motors still in motion!!");
+        state.lock().unwrap().status = "Attempted to recall while motors still in motion!!".to_string();
     }
 }
 // Saves data to JSON file from AppState.
@@ -1166,7 +1127,7 @@ async fn stop(State(state): State<Arc<Mutex<AppState>>>) {
 async fn load(State(state): State<Arc<Mutex<AppState>>>, form: Multipart) ->
     impl IntoResponse {
     println!("Config PostForm Handler");
-    let mut form_data = process_form(form).await;
+    let form_data = process_form(form).await;
     if form_data.contains_key("clear_default") {
         let _ = clear_default_profile_name();
         let mut state_lck = state.lock().unwrap();
@@ -1175,12 +1136,24 @@ async fn load(State(state): State<Arc<Mutex<AppState>>>, form: Multipart) ->
     } else if form_data.contains_key("files") && form_data.contains_key("load") {
         let file_name = form_data.get("files").unwrap();
         println!("Filename: {}", file_name);
-        let _ = load_profile_from_file(state.clone(), file_name);
-        if form_data.contains_key("default_profile") {
-            let _ = write_default_profile_name(file_name);
-            let mut state_lck = state.lock().unwrap();
-            state_lck.default_profile = file_name.to_string();
-            state_lck.status = format!("Default profile set: {}", file_name);
+        match load_profile_from_file(state.clone(), file_name) {
+            Ok(()) => {
+                let mut status = format!("Loaded profile: {}", file_name);
+                let mut state_lck = state.lock().unwrap();
+                if form_data.contains_key("default_profile") {
+                    if let Err(err) = write_default_profile_name(file_name) {
+                        status = format!("Loaded profile but failed to set default: {}", err);
+                    } else {
+                        state_lck.default_profile = file_name.to_string();
+                        status = format!("Loaded profile and set default: {}", file_name);
+                    }
+                }
+                state_lck.status = status;
+            }
+            Err(err) => {
+                let mut state_lck = state.lock().unwrap();
+                state_lck.status = format!("Failed to load profile {}: {}", file_name, err);
+            }
         }
     } else if form_data.contains_key("file_name") {
             let mut file_name = form_data.get("file_name").unwrap().clone().to_string();
@@ -1191,7 +1164,7 @@ async fn load(State(state): State<Arc<Mutex<AppState>>>, form: Multipart) ->
             println!("New file saved");
             sleep_save(state);
         }
-    return Redirect::to("/config");
+    Redirect::to("/config")
 }
 
 //power button handler.
@@ -1206,8 +1179,8 @@ async fn pwr_btn_handler(State(state): State<Arc<Mutex<AppState>>>, form: Multip
             "Blwr" => {
                 let mut state_lck = state.lock().unwrap();
                 let pin = state_lck.pwr_btns.Blwr[0];
-                let _ = state_lck.pwr_btns.mcp.set_pin(pin, if action == "ON" {mcp230xx::Level::High} else {mcp230xx::Level::Low}).unwrap_or(());
-                state_lck.status = format!("{}", if action == "ON" {"Blower ON"} else {"Blower OFF"});
+                state_lck.pwr_btns.mcp.set_pin(pin, if action == "ON" {mcp230xx::Level::High} else {mcp230xx::Level::Low}).unwrap_or(());
+                state_lck.status = (if action == "ON" {"Blower ON"} else {"Blower OFF"}).to_string();
 
             }
             "Fil" => {
@@ -1221,7 +1194,7 @@ async fn pwr_btn_handler(State(state): State<Arc<Mutex<AppState>>>, form: Multip
                 let mut state_lck = state.lock().unwrap();
                 let pin = state_lck.pwr_btns.Oper[0];
                 let _ = state_lck.pwr_btns.mcp.set_pin(pin, if action == "ON" {mcp230xx::Level::High} else {mcp230xx::Level::Low});
-                state_lck.status = format!("{}", if action == "ON" {"Operate"} else {"Standby"});
+                state_lck.status = (if action == "ON" {"Operate"} else {"Standby"}).to_string();
 
             }
 
@@ -1244,13 +1217,13 @@ where
         if form_data.contains_key("delay") {
             let delay = form_data.get("delay").unwrap();
             let _ = state_lck.pwr_btns.mcp.set_pin(pin2, if delay == "ON"  && pin1_status == mcp230xx::Level::High {mcp230xx::Level::High} else {mcp230xx::Level::Low});
-            state_lck.status = format!("{}", if action == "ON" && delay == "OFF" {
+            state_lck.status = (if action == "ON" && delay == "OFF" {
                 format!("{} Step Start !!!",  name)
             } else if pin1_status == mcp230xx::Level::High && delay == "ON" {
                 format!("{}  ON ! ! !", name)
             } else {
                 format!("{} Shutting Down...", name)
-            });
+            }).to_string();
         } 
     }
     
@@ -1267,7 +1240,7 @@ async fn aquire_data(state: Arc<Mutex<AppState>>) {
         let tune = val.tune.lock().unwrap().clone();
         let ind = val.ind.lock().unwrap().clone();
         let load = val.load.lock().unwrap().clone();
-        if *tune.operate.lock().unwrap() == false && *ind.operate.lock().unwrap() == false && *load.operate.lock().unwrap() == false && val.sleep == true {
+        if !*tune.operate.lock().unwrap() && !*ind.operate.lock().unwrap() && !*load.operate.lock().unwrap() && val.sleep {
             count += 1;
             if count >= 10 {
                 sleep_save(state.clone());
@@ -1276,14 +1249,14 @@ async fn aquire_data(state: Arc<Mutex<AppState>>) {
         } else {
             count = 0;
         }
-        if let Some(_) = val.enc {
+        if val.enc.is_some() {
             let clone = val.enc.clone().unwrap().enc();
             if clone >= 0 {
                 match val.sw_pos {
                     Some(Select::Tune) => {
                         let tune_max = tune.max.load(Ordering::Relaxed).saturating_sub(1);
                         if  clone < tune_max && clone > 0 {
-                            if let Some(_) = tune.pin_a {
+                            if tune.pin_a.is_some() {
                                 if let Some(ch) = tune.channel.clone() {
                                     let _ = ch.send((clone as u32, false));
                                 }
@@ -1295,7 +1268,7 @@ async fn aquire_data(state: Arc<Mutex<AppState>>) {
                     Some(Select::Ind) => {
                         let ind_max = ind.max.load(Ordering::Relaxed).saturating_sub(1);
                         if  clone < ind_max && clone > 0 {
-                            if let Some(_) = ind.pin_a {
+                            if ind.pin_a.is_some() {
                                 if let Some(ch) = ind.channel.clone() {
                                     let _ = ch.send((clone as u32, false));
                                 }
@@ -1307,7 +1280,7 @@ async fn aquire_data(state: Arc<Mutex<AppState>>) {
                     Some(Select::Load) => {
                         let load_max = load.max.load(Ordering::Relaxed).saturating_sub(1);
                         if  clone < load_max && clone > 0 {
-                            if let Some(_) = load.pin_a {
+                            if load.pin_a.is_some() {
                                 if let Some(ch) = load.channel.clone() {
                                     let _ = ch.send((clone as u32, false));
                                 }
@@ -1396,18 +1369,17 @@ async fn aquire_i2c_data(state: Arc<Mutex<AppState>>) {
         let mut temp = 0.0;
         let mut screen_ma = 0_u32;
         let mut plate_v = 0_u32;
-        if run {
-            if let Ok(t)=  val.mcp.read_val() {
+        if run
+            && let Ok(t)=  val.mcp.read_val() {
                 plate_v = t.2 as u32;
                 screen_ma = t.1 as u32;
                 temp = t.0;
             } 
-        } 
         let mut state_lck = state.lock().unwrap();
         state_lck.pwr_btns_state = temp_data.clone();
         state_lck.temperature = temp;
         state_lck.gauges.screen_a = screen_ma;
-        state_lck.gauges.plate_v = plate_v as u32 * 100;
+        state_lck.gauges.plate_v = plate_v * 100;
     }
         
 }
@@ -1443,7 +1415,7 @@ where
     } else {
         println!("Resetting {} to default settings", name
     );
-        if let Some(_) = state_stepper.pin_a {
+        if state_stepper.pin_a.is_some() {
             println!("Deleting {}", state_stepper.name);
             let pin_a = state_stepper.pin_a.unwrap();
             let pin_b = state_stepper.pin_b.unwrap();
@@ -1472,23 +1444,21 @@ where
 // Assistand function for recall route.
 fn recall_handler (state: Arc<Mutex<AppState>>, band: String, band_enum: Bands, require_stored: bool) -> Result<(), Box< dyn std::error::Error>> {
     let mut state_lck = state.lock().unwrap();
-    if require_stored {
-        if state_lck
+    if require_stored
+        && !state_lck
             .mem_valid
             .get(&band)
             .copied()
             .unwrap_or(false)
-            == false
         {
             state_lck.status = format!("No stored settings for {} band", band);
             if band_enum == Bands::M11 {
                 state_lck.band = band_enum.clone();
                 return Ok(());
             }
-            return Err(Box::new(Error::new(std::io::ErrorKind::Other, "Band not stored")));
+            return Err(Box::new(Error::other("Band not stored")));
         }
-    }
-    if let Some(_) = state_lck.enc {
+    if state_lck.enc.is_some() {
         if let Some(tx) = state_lck.meter_sender.clone() {
             let _ = tx.send(false);
         }
@@ -1518,7 +1488,7 @@ fn recall_handler (state: Arc<Mutex<AppState>>, band: String, band_enum: Bands, 
                 let value = band.clone();
                 thread::spawn(move || {
                     let temp_lck = x.lock().unwrap().clone();
-                    if let Some(_) = temp_lck.pin_a { 
+                    if temp_lck.pin_a.is_some() { 
                         let _ = temp_lck.channel.unwrap().send((temp_lck.mem.get(&value).unwrap().load(Ordering::Relaxed) as u32, false));
                     } else {
                         temp_lck.pos.store(temp_lck.mem.get(&value).unwrap().load(Ordering::Relaxed), Ordering::Relaxed);
@@ -1531,11 +1501,11 @@ fn recall_handler (state: Arc<Mutex<AppState>>, band: String, band_enum: Bands, 
             let mut state_lck = state.lock().unwrap();
             state_lck.status = format!("Recalled {} Band ! ! !", band);
         } else {
-            state_lck.status = format!("Error with enable pin!");
+            state_lck.status = "Error with enable pin!".to_string();
         }
-    return Ok(())
+    Ok(())
     } else {
-        Err(Box::new(Error::new(std::io::ErrorKind::Other, "No Encoder Present")))
+        Err(Box::new(Error::other("No Encoder Present")))
     }
 }
 fn store_handler(state: Arc<Mutex<AppState>>, band: String) {
@@ -1595,9 +1565,9 @@ fn sleep_save(state: Arc<Mutex<AppState>>) {
     saved_state.rig_extra_conf = state_lck.rig_extra_conf.clone();
     println!("Attempting to save data");
     if let Ok(output_data) = serde_json::to_string_pretty(&saved_state) {
-        println!("Saving file to {}", full_path.to_string_lossy().to_string());
-        if let Ok(_) = fs::write(full_path, output_data) {
-            state_lck.status = format!("All data successfully saved !");
+        println!("Saving file to {}", full_path.to_string_lossy());
+        if fs::write(full_path, output_data).is_ok() {
+            state_lck.status = "All data successfully saved !".to_string();
             if let Some(tx) = state_lck.meter_sender.clone() {
                 let _ = tx.send(true);
             }
@@ -1625,7 +1595,7 @@ where
     }
     data.entry("ratio".to_string()).insert_entry(stepper.lock().unwrap().ratio as u32);
     data.entry("max".to_string()).insert_entry(stepper.lock().unwrap().max.load(Ordering::Relaxed) as u32);
-    data.entry("pos".to_string()).insert_entry(stepper.lock().unwrap().pos.load(Ordering::Relaxed).clone() as u32);
+    data.entry("pos".to_string()).insert_entry(stepper.lock().unwrap().pos.load(Ordering::Relaxed) as u32);
     let mut temp_mem_data = HashMap::new();
     for (k, v) in stepper.lock().unwrap().mem.clone() {
         temp_mem_data.entry(k).insert_entry(v.load(Ordering::Relaxed)as u32);
@@ -1689,7 +1659,7 @@ fn apply_profile_to_state(state: Arc<Mutex<AppState>>, file_name: &str, output: 
     for (i, stepper) in my_stepper_arr.iter_mut().enumerate() {
         let name = &stepper.lock().unwrap().name.clone();
         if stepper.lock().unwrap().pin_a.unwrap_or(0u8) != 0 {
-            handle_stepper(&mut state_lck, HashMap::new(), name, false, |x| stepper.clone());
+            handle_stepper(&mut state_lck, HashMap::new(), name, false, |_| stepper.clone());
         }
         thread::sleep(Duration::from_millis(10));
         stepper.lock().unwrap().pin_a = if my_output_arr[i].contains_key("PinA") {Some(*my_output_arr[i].get("PinA").unwrap() as u8)} else {None};
@@ -1703,7 +1673,7 @@ fn apply_profile_to_state(state: Arc<Mutex<AppState>>, file_name: &str, output: 
             println!("Inductor set to lower speed");
             stepper_lck.speed = Duration::from_micros(400);
         }
-        if let Some(_) = stepper_lck.pin_a {
+        if stepper_lck.pin_a.is_some() {
             stepper_lck.run_2();
         }
         drop(stepper_lck);
@@ -1777,12 +1747,6 @@ fn apply_profile_to_state(state: Arc<Mutex<AppState>>, file_name: &str, output: 
     }
 }
 
-async fn read_html_from_file<P: AsRef<path::Path>>(path: P) -> Result<String, std::io::Error> {
-    let mut file = File::open(path).await?;
-    let mut contents = String::new();
-    file.read_to_string(&mut contents).await?;
-    Ok(contents)
-}
 //processes all Multi-part form data for all post request handlers.
 async fn process_form(mut form: Multipart) -> HashMap<String, String> {
     let mut form_data: HashMap<String, String> = HashMap::new();
@@ -1796,4 +1760,58 @@ async fn process_form(mut form: Multipart) -> HashMap<String, String> {
     }
     println!("Pwr Button form data {:?}", form_data);
     form_data
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Bands, StoredData};
+
+    #[test]
+    fn test_profile_json_deserializes_and_is_consistent() {
+        let profile: StoredData =
+            serde_json::from_str(include_str!("../static/test.json")).expect("test.json must deserialize");
+
+        for stepper in ["tune", "ind", "load"] {
+            let bands = profile
+                .mem
+                .get(stepper)
+                .unwrap_or_else(|| panic!("missing {stepper} memory map"));
+            for band in ["10M", "11M", "15M", "20M", "40M", "80M"] {
+                assert!(bands.contains_key(band), "{stepper} missing band {band}");
+            }
+        }
+
+        for band in ["10M", "11M", "15M", "20M", "40M", "80M"] {
+            assert_eq!(
+                profile.mem_valid.get(band),
+                Some(&true),
+                "mem_valid should mark {band} as learned"
+            );
+        }
+
+        let current_band = match profile.band {
+            Bands::M10 => "10M",
+            Bands::M11 => "11M",
+            Bands::M15 => "15M",
+            Bands::M20 => "20M",
+            Bands::M40 => "40M",
+            Bands::M80 => "80M",
+        };
+
+        assert_eq!(
+            profile.mem["tune"][current_band],
+            profile.tune["pos"],
+            "tune position should match active band memory"
+        );
+        assert_eq!(
+            profile.mem["ind"][current_band],
+            profile.ind["pos"],
+            "inductor position should match active band memory"
+        );
+        assert_eq!(
+            profile.mem["load"][current_band],
+            profile.load["pos"],
+            "load position should match active band memory"
+        );
+    }
 }

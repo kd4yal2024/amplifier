@@ -46,8 +46,8 @@ pub mod encoder {
             );
             let master_count = Arc::clone(&self.count);
 
-            let pin_a = self.pin_a.clone();
-            let pin_b = self.pin_b.clone();
+            let pin_a = self.pin_a;
+            let pin_b = self.pin_b;
             let stop = self.stop.clone();
             thread::spawn(move || {
                 let gpio = Gpio::new().unwrap();
@@ -188,7 +188,7 @@ pub mod stepper {
             let mut dir_pin = gpio.get(self.pin_b.unwrap()).unwrap().into_output();
             let mut count = 0;
             let pos = self.pos.clone();
-            let speed = self.speed.clone();
+            let speed = self.speed;
             let operate = self.operate.clone();
             thread::spawn(move ||  {
                 loop{
@@ -241,7 +241,7 @@ pub mod mcp {
     use mcp230xx::{Direction, Mcp230xx, Mcp23017, Level};
     use rppal::{self, {i2c::I2c}};
     use std::sync::{Arc, Mutex};
-    use embedded_devices::{devices::texas_instruments::ina228::{INA228Sync, address::{Address, Pin}}, sensor::VoltageMeasurement};
+    use embedded_devices::devices::texas_instruments::ina228::{INA228Sync, address::{Address, Pin}};
     use embedded_devices::sensor::OneshotSensorSync;
     use uom::si::electric_current::{ampere, milliampere};
     use uom::si::electric_potential::volt;
@@ -278,6 +278,12 @@ pub mod mcp {
         pub message: String,
         pub switch: HashMap<String, String>
     }
+    impl Default for Mcp {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl Mcp {
         // default function that sets all pins as output.
         pub fn new() -> Self {
@@ -323,7 +329,7 @@ pub mod mcp {
              for i in 0..=15 {
                 let pin = Mcp23017::try_from(i).unwrap();
                 println!("{:?}", pin);
-                if let Ok(_) = mcp.set_direction(pin, Direction::Output){
+                if mcp.set_direction(pin, Direction::Output).is_ok() {
                     println!("Pin: {:?} Configured as output", pin);
                 }
                 let _ = mcp.set_gpio(self.all_pins[i], Level::Low);
@@ -332,7 +338,7 @@ pub mod mcp {
         pub fn read_pin(&mut self, pin: Mcp23017)-> Result<Level, rppal::i2c::Error> {
             let i2c_mcp = MutexDevice::new(&self.bus).reverse();
             let mut mcp: Mcp230xx<_, Mcp23017> = Mcp230xx::new(i2c_mcp, 0x20).unwrap();
-            Ok(mcp.gpio(pin)?)
+            mcp.gpio(pin)
         }
         pub fn set_pin(&mut self, pin: Mcp23017, val: Level)-> Result<(), rppal::i2c::Error>{
             let i2c_mcp = MutexDevice::new(&self.bus).reverse();
@@ -343,7 +349,7 @@ pub mod mcp {
         }
         pub fn read_val(self) -> Result<(f64, f64, f64), Box<dyn Error>>{
             let i2c_ina = MutexDevice::new(&self.bus);
-            let delay = StdDelay::default();
+            let delay = StdDelay;
             let mut ina: INA228Sync<StdDelay, I2cDeviceSync<MutexDevice<'_, _>, u8>> = INA228Sync::new_i2c(delay, i2c_ina, Address::A0A1(Pin::Gnd, Pin::Gnd));
             ina.init(ElectricalResistance::new::<ohm>(0.015),
                         ElectricCurrent::new::<ampere>(3.0),

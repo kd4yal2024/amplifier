@@ -15,7 +15,8 @@ set -euo pipefail
 #   sudo systemctl stop amplifier-tci-follow
 #   sudo systemctl disable amplifier-tci-follow
 
-REPO_ROOT="/home/pi/github/amplifier"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 TCI_DIR="${REPO_ROOT}/tci-client"
 
 BIN_NAME="amplifier-tci-follow"
@@ -36,7 +37,11 @@ log() { echo "[*] $*"; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --url) URL="${2:-}"; shift 2 ;;
+    --url)
+      [[ $# -ge 2 ]] || die "--url requires a value"
+      URL="${2:-}"
+      shift 2
+      ;;
     --enable) DO_ENABLE=1; shift ;;
     --start) DO_START=1; shift ;;
     -h|--help)
@@ -56,6 +61,7 @@ done
 
 command -v sudo >/dev/null 2>&1 || die "sudo not found."
 command -v cargo >/dev/null 2>&1 || die "cargo not found. Run scripts/install-rust.sh first."
+command -v systemctl >/dev/null 2>&1 || die "systemctl not found."
 
 [[ -d "$TCI_DIR" ]] || die "TCI project not found at: $TCI_DIR (did you run cargo new tci-client?)"
 
@@ -85,7 +91,11 @@ fi
 
 if [[ -n "${URL}" ]]; then
   log "Writing TCI_URL into ${ENV_FILE}"
-  sudo sed -i -E "s|^TCI_URL=.*$|TCI_URL=${URL}|" "${ENV_FILE}"
+  if sudo grep -q '^TCI_URL=' "${ENV_FILE}"; then
+    sudo sed -i -E "s|^TCI_URL=.*$|TCI_URL=${URL}|" "${ENV_FILE}"
+  else
+    printf 'TCI_URL=%s\n' "${URL}" | sudo tee -a "${ENV_FILE}" >/dev/null
+  fi
 fi
 
 log "Installing validator ${VALIDATE_DST}"
@@ -96,8 +106,7 @@ set -euo pipefail
 ENV_FILE="/etc/amplifier/tci-follow.env"
 [[ -f "$ENV_FILE" ]] || { echo "Missing $ENV_FILE"; exit 2; }
 
-# shellcheck disable=SC1090
-source "$ENV_FILE"
+TCI_URL="$(grep -E '^TCI_URL=' "$ENV_FILE" | tail -n1 | cut -d= -f2- | tr -d '\r')"
 
 if [[ -z "${TCI_URL:-}" ]]; then
   echo "TCI_URL is empty. Set TCI_URL=ws://IP:PORT in $ENV_FILE"
@@ -153,8 +162,13 @@ ExecStart=${BIN_DST} \${TCI_URL}
 
 Restart=always
 RestartSec=2
+RestartPreventExitStatus=2 3 4 5 6
 StandardOutput=journal
 StandardError=journal
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=true
 
 [Install]
 WantedBy=multi-user.target
