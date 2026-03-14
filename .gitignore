@@ -1,4 +1,8 @@
 /target
+/\.idea/
+vscodessh
+vscodessh.pub
+*.iml
 
 # editor/backup junk
 *.bak
