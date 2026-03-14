@@ -2,6 +2,15 @@
 
 ## 2026-03-14
 
+### Commit `8a39414` - Move installer entrypoints to repo root
+
+- Added root-level `install-amplifier-controls.sh` as the primary installer entrypoint for the current checkout
+- Added root-level `uninstall-amplifier-controls.sh`
+- Converted `scripts/install-amplifier-controls.sh` into a compatibility wrapper that delegates to the root installer
+- Updated the README to document repo-root install and uninstall usage
+
+### Commit `d221190` - Harden install flow and document production setup
+
 Production-readiness hardening pass.
 
 ### Runtime
@@ -25,8 +34,6 @@ Production-readiness hardening pass.
 
 ### Install and service scripts
 
-- Added root-level `install-amplifier-controls.sh` for installs from the current checkout
-- Added root-level `uninstall-amplifier-controls.sh`
 - Hardened `scripts/install-amplifier-controls.sh` to avoid forcing an existing checkout onto a different branch
 - Added a dirty-worktree preflight check to `scripts/install-amplifier-controls.sh` with a `--force` override
 - Escaped generated systemd paths in `scripts/install-amplifier-controls.sh`
