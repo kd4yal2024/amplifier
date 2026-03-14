@@ -51,13 +51,22 @@ If startup fails with `Address already in use`, another `amplifier` process is a
 
 ## Installer scripts
 
-### `scripts/install-amplifier-controls.sh`
+### `install-amplifier-controls.sh`
 
+- Runs from the current repo checkout at `/home/pi/github/amplifier`
 - Preserves an existing checkout branch instead of forcibly switching it
-- Pulls updates only when the existing checkout is already on the requested branch
 - Refuses to reinstall over a dirty git worktree unless `--force` is passed
-- Escapes `WorkingDirectory` and `ExecStart` for the generated systemd unit
+- Installs the release binary to `/usr/local/bin/amplifier`
 - Verifies that `amplifier.service` reaches `active` state and that the HTTP port is actually listening
+
+The old path `scripts/install-amplifier-controls.sh` now delegates to the root installer for backward compatibility.
+
+### `uninstall-amplifier-controls.sh`
+
+- Stops and disables `amplifier.service` and `amplifier-tci-follow.service`
+- Removes the installed binaries from `/usr/local/bin`
+- Removes the installed systemd unit files
+- Keeps `/etc/amplifier/tci-follow.env` unless `--remove-tci-env` is passed
 
 ### `scripts/install-tci-follow-service.sh`
 
@@ -114,7 +123,19 @@ git -C /path/to/amplifier status --short
 If you intentionally want to reinstall over a dirty checkout:
 
 ```bash
-./scripts/install-amplifier-controls.sh --force
+./install-amplifier-controls.sh --force
+```
+
+### Uninstall
+
+```bash
+./uninstall-amplifier-controls.sh
+```
+
+To also remove the saved TCI env file:
+
+```bash
+./uninstall-amplifier-controls.sh --remove-tci-env
 ```
 
 ### TCI follow service status

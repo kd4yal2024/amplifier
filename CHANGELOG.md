@@ -25,6 +25,8 @@ Production-readiness hardening pass.
 
 ### Install and service scripts
 
+- Added root-level `install-amplifier-controls.sh` for installs from the current checkout
+- Added root-level `uninstall-amplifier-controls.sh`
 - Hardened `scripts/install-amplifier-controls.sh` to avoid forcing an existing checkout onto a different branch
 - Added a dirty-worktree preflight check to `scripts/install-amplifier-controls.sh` with a `--force` override
 - Escaped generated systemd paths in `scripts/install-amplifier-controls.sh`
