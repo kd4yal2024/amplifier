@@ -396,7 +396,14 @@ async fn config_post(
     State(state): State<Arc<Mutex<AppState>>>,
     form: Multipart,
 ) -> impl IntoResponse {
-    let form_data = process_form(form).await;
+    let form_data = match process_form(form).await {
+        Ok(data) => data,
+        Err(err) => {
+            let mut state_lck = state.lock().unwrap();
+            state_lck.status = format!("Invalid config form data: {}", err);
+            return Redirect::to("/config");
+        }
+    };
     let mut state = state.lock().unwrap();
     println!("FormData: {:?}", form_data);
     if form_data.contains_key("tci_server") || form_data.contains_key("follow_me") {
@@ -1087,7 +1094,7 @@ async fn cat_follow_task(state: Arc<Mutex<AppState>>) {
 //Selects a stepper to be tuned.
 async fn selector(
     Path(val): Path<String>, State(app_state): State<Arc<Mutex<AppState>>>,
-    mut form_data: Multipart,
+    form_data: Multipart,
 ) -> impl IntoResponse {
     println!("Form handler");
     println!("{}", val);
@@ -1097,9 +1104,17 @@ async fn selector(
     let ind = state_lck.ind.lock().unwrap().clone();
     let load = state_lck.load.lock().unwrap().clone();
     if  !*tune.operate.lock().unwrap() && !*ind.operate.lock().unwrap() && !*load.operate.lock().unwrap() {
-        while let Some(val) = form_data.next_field().await.unwrap() {
-            println!("Name: {}", val.name().unwrap());
-            match val.name().unwrap() {
+        let form_data = match process_form(form_data).await {
+            Ok(data) => data,
+            Err(err) => {
+                let mut state = app_state.lock().unwrap();
+                state.status = format!("Invalid selector form data: {}", err);
+                return StatusCode::BAD_REQUEST;
+            }
+        };
+        for key in form_data.keys() {
+            println!("Name: {}", key);
+            match key.as_str() {
                 "tune" => {
                     let mut state = app_state.lock().unwrap();
                     if selector_handler(&mut state, |x| x.tune.clone()).is_ok() {
@@ -1223,7 +1238,14 @@ async fn stop(State(state): State<Arc<Mutex<AppState>>>) {
 async fn load(State(state): State<Arc<Mutex<AppState>>>, form: Multipart) ->
     impl IntoResponse {
     println!("Config PostForm Handler");
-    let form_data = process_form(form).await;
+    let form_data = match process_form(form).await {
+        Ok(data) => data,
+        Err(err) => {
+            let mut state_lck = state.lock().unwrap();
+            state_lck.status = format!("Invalid load form data: {}", err);
+            return Redirect::to("/config");
+        }
+    };
     if form_data.contains_key("clear_default") {
         let _ = clear_default_profile_name();
         let mut state_lck = state.lock().unwrap();
@@ -1265,7 +1287,14 @@ async fn load(State(state): State<Arc<Mutex<AppState>>>, form: Multipart) ->
 
 //power button handler.
 async fn pwr_btn_handler(State(state): State<Arc<Mutex<AppState>>>, form: Multipart) {
-    let form_data = process_form(form).await;
+    let form_data = match process_form(form).await {
+        Ok(data) => data,
+        Err(err) => {
+            let mut state_lck = state.lock().unwrap();
+            state_lck.status = format!("Invalid power control form data: {}", err);
+            return;
+        }
+    };
     if form_data.contains_key("ID") {
         let sw = form_data.get("ID").unwrap();
         println!("Switch: {}", sw);
@@ -1429,6 +1458,8 @@ async fn aquire_i2c_data(state: Arc<Mutex<AppState>>) {
     let (tx, rx) = mpsc::channel();
     state.lock().unwrap().meter_sender = Some(tx);
     let mut run = true;
+    let mut pin_fault_active = false;
+    let mut meter_fault_active = false;
     loop {
         interval.tick().await;
         let mut val = state.lock().unwrap().pwr_btns.clone();
@@ -1439,11 +1470,23 @@ async fn aquire_i2c_data(state: Arc<Mutex<AppState>>) {
             ("Oper".to_string(), ["OFF".to_string(), "OFF".to_string()]),
         ]);
 
-        let mut read_level = |pin| {
-            val.mcp
-                .read_pin(pin)
-                .map(|level| if level == mcp230xx::Level::High { "ON".to_string() } else { "OFF".to_string() })
-                .unwrap_or_else(|_| "OFF".to_string())
+        let mut pin_read_failed = false;
+        let mut read_level = |pin| match val.mcp.read_pin(pin) {
+            Ok(level) => {
+                if pin_fault_active {
+                    println!("I2C: power button pin reads recovered");
+                    pin_fault_active = false;
+                }
+                if level == mcp230xx::Level::High { "ON".to_string() } else { "OFF".to_string() }
+            }
+            Err(err) => {
+                pin_read_failed = true;
+                if !pin_fault_active {
+                    eprintln!("I2C: failed to read power button pin state: {}", err);
+                    pin_fault_active = true;
+                }
+                "OFF".to_string()
+            }
         };
 
         temp_data.insert("Blwr".to_string(), [read_level(val.Blwr[0]), "OFF".to_string()]);
@@ -1462,17 +1505,35 @@ async fn aquire_i2c_data(state: Arc<Mutex<AppState>>) {
         let mut temp = 0.0;
         let mut screen_ma = 0_u32;
         let mut plate_v = 0_u32;
+        let mut meter_read_failed = false;
         if run
             && let Ok(t)=  val.mcp.read_val() {
                 plate_v = t.2 as u32;
                 screen_ma = t.1 as u32;
                 temp = t.0;
-            } 
+                if meter_fault_active {
+                    println!("I2C: meter reads recovered");
+                    meter_fault_active = false;
+                }
+            } else if run {
+                meter_read_failed = true;
+                if !meter_fault_active {
+                    eprintln!("I2C: failed to read meter values from MCP");
+                    meter_fault_active = true;
+                }
+            }
         let mut state_lck = state.lock().unwrap();
         state_lck.pwr_btns_state = temp_data.clone();
         state_lck.temperature = temp;
         state_lck.gauges.screen_a = screen_ma;
         state_lck.gauges.plate_v = plate_v * 100;
+        if pin_read_failed {
+            state_lck.status = "I2C warning: failed to read power button state".to_string();
+        } else if meter_read_failed {
+            state_lck.status = "I2C warning: failed to read meter values".to_string();
+        } else if pin_fault_active || meter_fault_active {
+            state_lck.status = "I2C warning: hardware read error".to_string();
+        }
     }
         
 }
@@ -1849,18 +1910,28 @@ fn apply_profile_to_state(state: Arc<Mutex<AppState>>, file_name: &str, output: 
 }
 
 //processes all Multi-part form data for all post request handlers.
-async fn process_form(mut form: Multipart) -> HashMap<String, String> {
+async fn process_form(mut form: Multipart) -> Result<HashMap<String, String>, String> {
     let mut form_data: HashMap<String, String> = HashMap::new();
     println!("Config PostForm Handler");
-    while let Some(val) = form.next_field().await.unwrap() {
-        println!("Name: {:?}", val.name().unwrap().to_string());
-        let k = val.name().unwrap().to_string();
-        let v = val.text().await.unwrap().to_string();
+    while let Some(val) = form
+        .next_field()
+        .await
+        .map_err(|err| format!("multipart field error: {}", err))?
+    {
+        let k = val
+            .name()
+            .map(str::to_string)
+            .ok_or_else(|| "multipart field missing name".to_string())?;
+        println!("Name: {:?}", k);
+        let v = val
+            .text()
+            .await
+            .map_err(|err| format!("multipart text error for {}: {}", k, err))?;
         println!("Key: {}, Value: {}", k, v);
         form_data.insert(k.clone(), v.clone());
     }
     println!("Pwr Button form data {:?}", form_data);
-    form_data
+    Ok(form_data)
 }
 
 #[cfg(test)]
