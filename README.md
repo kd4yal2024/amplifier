@@ -64,6 +64,8 @@ If startup fails with `Address already in use`, another `amplifier` process is a
 - TCI and CAT band detection use the latest requested band, even if a new request arrives while Tune/Ind/Load are still moving
 - If a band change arrives during motion, it is queued and applied automatically when the motors become idle
 - The live system wiring maps the 40m and 80m band outputs in reverse order relative to the last two software slots, and the runtime mapping compensates for that
+- TCI Follow Me now has an idle watchdog: while TCI follow is enabled and CAT is not active, the app expects valid TCI frequency frames at least every 15 seconds and forces a reconnect if the websocket goes stale while still marked connected
+- CAT auto-band now has a matching watchdog: while CAT is enabled, the app expects valid frequency polls at least every 15 seconds and marks CAT stale if polling stops yielding usable frequency data
 
 ### Stepper and status behavior
 

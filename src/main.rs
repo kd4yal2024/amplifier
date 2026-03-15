@@ -25,7 +25,11 @@ use std::path;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::{convert::Infallible, path::PathBuf, time::Duration};
+use std::{
+    convert::Infallible,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 use tokio::sync::broadcast::{self, Sender};
 use tokio::process::Command;
 use tokio::time::{interval, sleep, timeout};
@@ -765,6 +769,9 @@ fn band_to_key(band: &Bands) -> &'static str {
     }
 }
 
+const TCI_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(15);
+const CAT_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(15);
+
 fn try_recall_pending_band(
     state: Arc<Mutex<AppState>>,
     source: &str,
@@ -829,6 +836,7 @@ async fn tci_follow_task(state: Arc<Mutex<AppState>>) {
         println!("TCI: connecting to {}", server);
         match connect_async(server.as_str()).await {
             Ok((mut ws, _)) => {
+                let mut last_valid_tci_frame = Instant::now();
                 {
                     let mut state_lck = state.lock().unwrap();
                     state_lck.tci_status = "CONNECTED".to_string();
@@ -861,8 +869,9 @@ async fn tci_follow_task(state: Arc<Mutex<AppState>>) {
                             match msg {
                                 Some(Ok(Message::Text(s))) => {
                                     for frame in split_frames(&s) {
-                                        if let Some(hz) = parse_any_tx_hz(frame)
-                                            && let Some(band) = band_from_hz(hz) {
+                                        if let Some(hz) = parse_any_tx_hz(frame) {
+                                            last_valid_tci_frame = Instant::now();
+                                            if let Some(band) = band_from_hz(hz) {
                                                 println!("TCI: band {} at {} Hz", band_to_key(&band), hz);
                                                 {
                                                     let mut state_lck = state.lock().unwrap();
@@ -910,6 +919,7 @@ async fn tci_follow_task(state: Arc<Mutex<AppState>>) {
                                                     }
                                                 }
                                             }
+                                        }
                                     }
                                 }
                                 Some(Ok(Message::Close(_))) | None => break,
@@ -917,8 +927,14 @@ async fn tci_follow_task(state: Arc<Mutex<AppState>>) {
                             }
                         }
                         _ = sleep(Duration::from_millis(250)) => {
-                            let state_lck = state.lock().unwrap();
+                            let mut state_lck = state.lock().unwrap();
                             if !state_lck.follow_me || state_lck.tci_server != server {
+                                break;
+                            }
+                            if last_valid_tci_frame.elapsed() > TCI_WATCHDOG_TIMEOUT {
+                                state_lck.tci_status = "ERROR".to_string();
+                                state_lck.status = "TCI watchdog: no frequency updates received, reconnecting".to_string();
+                                println!("TCI watchdog: stale connection, reconnecting");
                                 break;
                             }
                         }
@@ -943,6 +959,7 @@ async fn tci_follow_task(state: Arc<Mutex<AppState>>) {
 
 async fn cat_follow_task(state: Arc<Mutex<AppState>>) {
     let mut cat_connected = false;
+    let mut last_valid_cat_poll = Instant::now();
     loop {
         let pending_cat = {
             let state_lck = state.lock().unwrap();
@@ -980,6 +997,7 @@ async fn cat_follow_task(state: Arc<Mutex<AppState>>) {
                 state_lck.cat_status = "DISCONNECTED".to_string();
             }
             cat_connected = false;
+            last_valid_cat_poll = Instant::now();
             sleep(Duration::from_millis(500)).await;
             continue;
         }
@@ -991,6 +1009,7 @@ async fn cat_follow_task(state: Arc<Mutex<AppState>>) {
                 state_lck.status = "CAT enabled but model/device not set".to_string();
             }
             cat_connected = false;
+            last_valid_cat_poll = Instant::now();
             sleep(Duration::from_millis(500)).await;
             continue;
         }
@@ -1027,6 +1046,7 @@ async fn cat_follow_task(state: Arc<Mutex<AppState>>) {
                     state_lck.status = format!("CAT error: {}", line);
                     cat_connected = false;
                 } else if let Ok(hz) = line.parse::<u64>() {
+                    last_valid_cat_poll = Instant::now();
                     if let Some(band) = band_from_hz(hz) {
                         let maybe_recall = {
                             let mut state_lck = state.lock().unwrap();
@@ -1086,6 +1106,13 @@ async fn cat_follow_task(state: Arc<Mutex<AppState>>) {
                 state_lck.status = "CAT rigctl timeout".to_string();
                 cat_connected = false;
             }
+        }
+        if cat_connected && last_valid_cat_poll.elapsed() > CAT_WATCHDOG_TIMEOUT {
+            let mut state_lck = state.lock().unwrap();
+            state_lck.cat_status = "ERROR".to_string();
+            state_lck.status = "CAT watchdog: no valid frequency updates received".to_string();
+            cat_connected = false;
+            println!("CAT watchdog: stale polling state");
         }
         sleep(Duration::from_millis(400)).await;
     }

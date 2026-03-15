@@ -17,12 +17,14 @@
 - Added operator-visible I2C fault reporting and recovery logging for power-button pin reads and meter reads
 - Normalized stepper `max` handling during profile load/save and live encoder control so Tune/Ind/Load continue to work even if a saved position or stored band memory exceeds the previously saved max
 - Narrowed I2C warning status updates so background meter faults no longer overwrite unrelated operator actions like save/store/select confirmations
+- Added idle watchdogs for both TCI and CAT follow paths so stale "connected" sessions are only tolerated while those services are enabled and still receiving valid frequency updates
 
 ### Documentation
 
 - Documented the restored power-control behavior and queued band-follow behavior in the README
 - Documented the DSI LCD / Goodix touchscreen setup, touch-mapping troubleshooting steps, and installer behavior in the README
 - Documented the stepper max normalization and I2C status-message behavior in the README
+- Documented the new TCI/CAT follow watchdog behavior in the README
 
 ### Install and desktop setup
 
