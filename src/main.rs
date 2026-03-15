@@ -1351,6 +1351,14 @@ where
             }).to_string();
         } 
     }
+
+fn normalized_stepper_max(stepper: &Stepper) -> i32 {
+    let mut max_value = stepper.max.load(Ordering::Relaxed).max(stepper.pos.load(Ordering::Relaxed));
+    for value in stepper.mem.values() {
+        max_value = max_value.max(value.load(Ordering::Relaxed));
+    }
+    max_value.max(0)
+}
     
 // Aquires data from peripheral devices and feeds SSE via a broadcast channel.
 async fn aquire_data(state: Arc<Mutex<AppState>>) {
@@ -1379,8 +1387,8 @@ async fn aquire_data(state: Arc<Mutex<AppState>>) {
             if clone >= 0 {
                 match val.sw_pos {
                     Some(Select::Tune) => {
-                        let tune_max = tune.max.load(Ordering::Relaxed).saturating_sub(1);
-                        if  clone < tune_max && clone > 0 {
+                        let tune_max = normalized_stepper_max(&tune);
+                        if clone <= tune_max && clone >= 0 {
                             if tune.pin_a.is_some() {
                                 if let Some(ch) = tune.channel.clone() {
                                     let _ = ch.send((clone as u32, false));
@@ -1391,8 +1399,8 @@ async fn aquire_data(state: Arc<Mutex<AppState>>) {
                         }
                     }
                     Some(Select::Ind) => {
-                        let ind_max = ind.max.load(Ordering::Relaxed).saturating_sub(1);
-                        if  clone < ind_max && clone > 0 {
+                        let ind_max = normalized_stepper_max(&ind);
+                        if clone <= ind_max && clone >= 0 {
                             if ind.pin_a.is_some() {
                                 if let Some(ch) = ind.channel.clone() {
                                     let _ = ch.send((clone as u32, false));
@@ -1403,8 +1411,8 @@ async fn aquire_data(state: Arc<Mutex<AppState>>) {
                         }
                     }
                     Some(Select::Load) => {
-                        let load_max = load.max.load(Ordering::Relaxed).saturating_sub(1);
-                        if  clone < load_max && clone > 0 {
+                        let load_max = normalized_stepper_max(&load);
+                        if clone <= load_max && clone >= 0 {
                             if load.pin_a.is_some() {
                                 if let Some(ch) = load.channel.clone() {
                                     let _ = ch.send((clone as u32, false));
@@ -1527,12 +1535,26 @@ async fn aquire_i2c_data(state: Arc<Mutex<AppState>>) {
         state_lck.temperature = temp;
         state_lck.gauges.screen_a = screen_ma;
         state_lck.gauges.plate_v = plate_v * 100;
-        if pin_read_failed {
-            state_lck.status = "I2C warning: failed to read power button state".to_string();
+        let i2c_status = if pin_read_failed {
+            Some("I2C warning: failed to read power button state")
         } else if meter_read_failed {
-            state_lck.status = "I2C warning: failed to read meter values".to_string();
+            Some("I2C warning: failed to read meter values")
         } else if pin_fault_active || meter_fault_active {
-            state_lck.status = "I2C warning: hardware read error".to_string();
+            Some("I2C warning: hardware read error")
+        } else {
+            None
+        };
+        match i2c_status {
+            Some(message) => {
+                if state_lck.status.is_empty() || state_lck.status.starts_with("I2C warning:") {
+                    state_lck.status = message.to_string();
+                }
+            }
+            None => {
+                if state_lck.status.starts_with("I2C warning:") {
+                    state_lck.status.clear();
+                }
+            }
         }
     }
         
@@ -1749,10 +1771,11 @@ where
 
     }
     data.entry("ratio".to_string()).insert_entry(stepper.lock().unwrap().ratio as u32);
-    data.entry("max".to_string()).insert_entry(stepper.lock().unwrap().max.load(Ordering::Relaxed) as u32);
-    data.entry("pos".to_string()).insert_entry(stepper.lock().unwrap().pos.load(Ordering::Relaxed) as u32);
+    let stepper_lck = stepper.lock().unwrap();
+    data.entry("max".to_string()).insert_entry(normalized_stepper_max(&stepper_lck) as u32);
+    data.entry("pos".to_string()).insert_entry(stepper_lck.pos.load(Ordering::Relaxed) as u32);
     let mut temp_mem_data = HashMap::new();
-    for (k, v) in stepper.lock().unwrap().mem.clone() {
+    for (k, v) in stepper_lck.mem.clone() {
         temp_mem_data.entry(k).insert_entry(v.load(Ordering::Relaxed)as u32);
         
     }
@@ -1820,8 +1843,16 @@ fn apply_profile_to_state(state: Arc<Mutex<AppState>>, file_name: &str, output: 
         stepper.lock().unwrap().pin_a = if my_output_arr[i].contains_key("PinA") {Some(*my_output_arr[i].get("PinA").unwrap() as u8)} else {None};
         stepper.lock().unwrap().pin_b = if my_output_arr[i].contains_key("PinB") {Some(*my_output_arr[i].get("PinB").unwrap() as u8)} else {None};
         stepper.lock().unwrap().ena = if my_output_arr[i].contains_key("ena") {Some(*my_output_arr[i].get("ena").unwrap() as u8)} else {None};
-        stepper.lock().unwrap().max.store(*my_output_arr[i].get("max").unwrap() as i32, Ordering::Relaxed);
-        stepper.lock().unwrap().pos.store(*my_output_arr[i].get("pos").unwrap() as i32, Ordering::Relaxed);
+        let stored_pos = *my_output_arr[i].get("pos").unwrap() as i32;
+        let mut normalized_max = (*my_output_arr[i].get("max").unwrap() as i32).max(stored_pos);
+        if let Some(stepper_mem) = output.mem.get(&stepper.lock().unwrap().name) {
+            for band in bands {
+                let value = *stepper_mem.get(&band.to_string()).unwrap_or(&0) as i32;
+                normalized_max = normalized_max.max(value);
+            }
+        }
+        stepper.lock().unwrap().max.store(normalized_max, Ordering::Relaxed);
+        stepper.lock().unwrap().pos.store(stored_pos, Ordering::Relaxed);
         stepper.lock().unwrap().ratio = *my_output_arr[i].get("ratio").unwrap() as u8;
         let mut stepper_lck = stepper.lock().unwrap();
         if stepper_lck.name == "ind" {

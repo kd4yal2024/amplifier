@@ -65,6 +65,12 @@ If startup fails with `Address already in use`, another `amplifier` process is a
 - If a band change arrives during motion, it is queued and applied automatically when the motors become idle
 - The live system wiring maps the 40m and 80m band outputs in reverse order relative to the last two software slots, and the runtime mapping compensates for that
 
+### Stepper and status behavior
+
+- Stepper `max` values are normalized during profile load/save so the active position and stored band memories cannot exceed the runtime travel limit used by the encoder loop
+- This prevents Tune/Ind/Load selection from appearing dead after loading a profile with stale `pos > max` data
+- I2C hardware faults are logged and can still surface as warnings, but they no longer overwrite unrelated operator status messages such as save/store confirmations unless the status bar is already showing an I2C warning
+
 ### LCD and touchscreen setup
 
 - The production UI is expected to run on the Raspberry Pi DSI panel as output `DSI-1`
