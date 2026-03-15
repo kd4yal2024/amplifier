@@ -8,12 +8,22 @@ SERVICE_NAME="amplifier.service"
 DEFAULT_BIND_ADDR="0.0.0.0:3000"
 HTTP_PORT="${DEFAULT_BIND_ADDR##*:}"
 FORCE=0
+INSTALL_USER="${INSTALL_USER:-${SUDO_USER:-pi}}"
+INSTALL_HOME=""
 
 log() { printf "\n[%s] %s\n" "$(date +'%F %T')" "$*"; }
 die() { printf "\nERROR: %s\n" "$*" >&2; exit 1; }
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
+}
+
+resolve_install_user() {
+  local passwd_entry
+  passwd_entry="$(getent passwd "${INSTALL_USER}" || true)"
+  [[ -n "${passwd_entry}" ]] || die "Install user not found: ${INSTALL_USER}"
+  INSTALL_HOME="$(printf '%s\n' "${passwd_entry}" | cut -d: -f6)"
+  [[ -n "${INSTALL_HOME}" ]] || die "Could not resolve home directory for ${INSTALL_USER}"
 }
 
 ensure_labwc_touch_entry() {
@@ -40,7 +50,7 @@ ensure_labwc_touch_entry() {
 }
 
 install_labwc_touch_mappings() {
-  local user_rc="${HOME}/.config/labwc/rc.xml"
+  local user_rc="${INSTALL_HOME}/.config/labwc/rc.xml"
   local system_rc="/etc/xdg/labwc/rc.xml"
   local entries=(
     '  <touch deviceName="10-0014 Goodix Capacitive TouchScreen" mapToOutput="DSI-1" mouseEmulation="yes" />'
@@ -67,9 +77,9 @@ EOF
 
   if command -v labwc >/dev/null 2>&1; then
     local labwc_pid
-    labwc_pid="$(pgrep -u pi -x labwc | head -n1 || true)"
+    labwc_pid="$(pgrep -u "${INSTALL_USER}" -x labwc | head -n1 || true)"
     if [[ -n "${labwc_pid}" ]]; then
-      sudo -u pi env LABWC_PID="${labwc_pid}" labwc --reconfigure || true
+      sudo -u "${INSTALL_USER}" env LABWC_PID="${labwc_pid}" labwc --reconfigure || true
     fi
   fi
 }
@@ -98,8 +108,10 @@ require_cmd cargo
 require_cmd sudo
 require_cmd systemctl
 require_cmd ss
+require_cmd getent
 
 [[ -d "${REPO_ROOT}/.git" ]] || die "Run this script from the repository root checkout."
+resolve_install_user
 
 if [[ "${FORCE}" -eq 0 ]] && [[ -n "$(git -C "${REPO_ROOT}" status --porcelain)" ]]; then
   die "Repo has uncommitted changes. Commit/stash them or rerun with --force."
@@ -112,7 +124,7 @@ chmod +x scripts/*.sh
 
 log "Installing labwc touchscreen mappings for the Goodix DSI panel..."
 install_labwc_touch_mappings
-log "labwc touch mappings OK: ${HOME}/.config/labwc/rc.xml"
+log "labwc touch mappings OK: ${INSTALL_HOME}/.config/labwc/rc.xml"
 
 log "Installing Hamlib..."
 "${REPO_ROOT}/scripts/install-hamlib.sh"
@@ -163,7 +175,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
+User=${INSTALL_USER}
 WorkingDirectory=${REPO_ROOT}
 ExecStart=${MAIN_BIN_DST}
 Restart=always

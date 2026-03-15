@@ -27,6 +27,7 @@ ENV_FILE="${ENV_DIR}/tci-follow.env"
 
 VALIDATE_DST="/usr/local/bin/${BIN_NAME}-validate"
 UNIT_FILE="/etc/systemd/system/${BIN_NAME}.service"
+INSTALL_USER="${INSTALL_USER:-${SUDO_USER:-pi}}"
 
 URL=""
 DO_ENABLE=0
@@ -62,6 +63,7 @@ done
 command -v sudo >/dev/null 2>&1 || die "sudo not found."
 command -v cargo >/dev/null 2>&1 || die "cargo not found. Run scripts/install-rust.sh first."
 command -v systemctl >/dev/null 2>&1 || die "systemctl not found."
+getent passwd "${INSTALL_USER}" >/dev/null 2>&1 || die "Install user not found: ${INSTALL_USER}"
 
 [[ -d "$TCI_DIR" ]] || die "TCI project not found at: $TCI_DIR (did you run cargo new tci-client?)"
 
@@ -151,7 +153,7 @@ Conflicts=amplifier-rigctld.service rigctld.service
 
 [Service]
 Type=simple
-User=pi
+User=${INSTALL_USER}
 EnvironmentFile=${ENV_FILE}
 
 # Refuse to start if URL missing/invalid/unreachable

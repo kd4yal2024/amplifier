@@ -414,6 +414,9 @@ async fn config_post(
         if let Some(follow) = form_data.get("follow_me") {
             state.follow_me = follow == "on";
         }
+        if !state.follow_me {
+            state.pending_tci_band = None;
+        }
         state.status = format!(
             "TCI settings updated (Follow Me: {})",
             if state.follow_me { "ON" } else { "OFF" }
@@ -430,6 +433,9 @@ async fn config_post(
         || form_data.contains_key("rig_extra_conf")
     {
         state.cat_enabled = form_data.get("cat_enabled").map(|v| v == "on").unwrap_or(false);
+        if !state.cat_enabled {
+            state.pending_cat_band = None;
+        }
         if let Some(host) = form_data.get("rigctld_host") {
             state.rigctld_host = host.trim().to_string();
         }
@@ -468,6 +474,7 @@ async fn config_post(
     }
     if state.cat_enabled && state.follow_me {
         state.follow_me = false;
+        state.pending_tci_band = None;
         state.status = "CAT and TCI cannot both be enabled; CAT kept ON, TCI turned OFF".to_string();
     }
 
@@ -758,6 +765,19 @@ fn try_recall_pending_band(
 ) -> Option<(Bands, &'static str)> {
     let band = pending_band?;
     let mut state_lck = state.lock().unwrap();
+    let source_enabled = match source {
+        "Follow Me" => state_lck.follow_me && !state_lck.tci_server.is_empty() && !state_lck.cat_enabled,
+        "CAT" => state_lck.cat_enabled,
+        _ => true,
+    };
+    if !source_enabled {
+        match source {
+            "Follow Me" => state_lck.pending_tci_band = None,
+            "CAT" => state_lck.pending_cat_band = None,
+            _ => {}
+        }
+        return None;
+    }
     let tune_busy = *state_lck.tune.lock().unwrap().operate.lock().unwrap();
     let ind_busy = *state_lck.ind.lock().unwrap().operate.lock().unwrap();
     let load_busy = *state_lck.load.lock().unwrap().operate.lock().unwrap();
@@ -1792,8 +1812,15 @@ fn apply_profile_to_state(state: Arc<Mutex<AppState>>, file_name: &str, output: 
     }
     state_lck.follow_me = output.follow_me;
     state_lck.cat_enabled = output.cat_enabled;
+    if !state_lck.follow_me {
+        state_lck.pending_tci_band = None;
+    }
+    if !state_lck.cat_enabled {
+        state_lck.pending_cat_band = None;
+    }
     if state_lck.cat_enabled && state_lck.follow_me {
         state_lck.follow_me = false;
+        state_lck.pending_tci_band = None;
     }
     if !output.cat_status.is_empty() {
         state_lck.cat_status = output.cat_status;

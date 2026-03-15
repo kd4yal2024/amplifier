@@ -80,8 +80,9 @@ If startup fails with `Address already in use`, another `amplifier` process is a
 - Runs from the current repo checkout at `/home/pi/github/amplifier`
 - Preserves an existing checkout branch instead of forcibly switching it
 - Refuses to reinstall over a dirty git worktree unless `--force` is passed
+- Installs services for `INSTALL_USER`, defaulting to `${SUDO_USER}` when present or `pi` otherwise
 - Installs the release binary to `/usr/local/bin/amplifier`
-- Ensures `labwc` contains the Goodix touchscreen-to-`DSI-1` mapping needed for touch input on the LCD
+- Ensures that install user's `labwc` config contains the Goodix touchscreen-to-`DSI-1` mapping needed for touch input on the LCD
 - Verifies that `amplifier.service` reaches `active` state and that the HTTP port is actually listening
 
 The old path `scripts/install-amplifier-controls.sh` now delegates to the root installer for backward compatibility.
@@ -96,6 +97,7 @@ The old path `scripts/install-amplifier-controls.sh` now delegates to the root i
 ### `scripts/install-tci-follow-service.sh`
 
 - Validates that `--url` is passed with a value
+- Uses the same `INSTALL_USER` convention as the main installer for the systemd service account
 - Ensures `TCI_URL` is written even if the env file did not already contain that key
 - Avoids sourcing the env file during validation
 - Adds more defensive systemd behavior to reduce restart loops on static misconfiguration
@@ -172,6 +174,12 @@ If you intentionally want to reinstall over a dirty checkout:
 
 ```bash
 ./install-amplifier-controls.sh --force
+```
+
+To target a non-default desktop/service account:
+
+```bash
+INSTALL_USER=pi ./install-amplifier-controls.sh
 ```
 
 ### Uninstall

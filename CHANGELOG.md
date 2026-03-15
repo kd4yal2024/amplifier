@@ -12,6 +12,7 @@
 - Fixed the 40m/80m band-output mapping for the live hardware wiring
 - Changed TCI and CAT follow logic so a band change received while Tune/Ind/Load are moving is queued and applied after motion finishes instead of being dropped
 - Added the live Goodix `0014` touchscreen mapping to the `labwc` setup path so the DSI LCD receives touch input correctly
+- Prevented queued TCI/CAT band changes from firing after the operator disables Follow Me or CAT
 
 ### Documentation
 
@@ -22,6 +23,7 @@
 
 - Updated `install-amplifier-controls.sh` to ensure `~/.config/labwc/rc.xml` contains the Goodix `0014` touch mappings for `DSI-1` / `DSI-2`
 - Added a best-effort `labwc --reconfigure` step during install so touchscreen mapping changes apply without waiting for a reboot
+- Changed the installers to resolve a single `INSTALL_USER` and use that same account for service units, labwc config writes, and compositor reloads
 
 ### Commit `8a39414` - Move installer entrypoints to repo root
 
