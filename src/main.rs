@@ -38,6 +38,11 @@ use tokio_tungstenite::tungstenite::Message;
 use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 const ENABLE_PIN: u8 = 16;
+const DEFAULT_WATCHDOG_SECS: u64 = 15;
+
+fn default_watchdog_secs() -> u64 {
+    DEFAULT_WATCHDOG_SECS
+}
 
 #[derive(Template)]
 #[template(path = "amplifier2.html")]
@@ -55,9 +60,11 @@ struct ConfigTemplate {
     tci_server: String,
     follow_me: bool,
     tci_status: String,
+    tci_watchdog_secs: u64,
     default_profile: String,
     cat_enabled: bool,
     cat_status: String,
+    cat_watchdog_secs: u64,
     rig_model_id: i32,
     rig_serial_device: String,
     rig_baud: u32,
@@ -138,10 +145,14 @@ struct StoredData {
     tci_server: String,
     #[serde(default)]
     follow_me: bool,
+    #[serde(default = "default_watchdog_secs")]
+    tci_watchdog_secs: u64,
     #[serde(default)]
     cat_enabled: bool,
     #[serde(default)]
     cat_status: String,
+    #[serde(default = "default_watchdog_secs")]
+    cat_watchdog_secs: u64,
     #[serde(default)]
     rigctld_host: String,
     #[serde(default)]
@@ -170,8 +181,10 @@ impl StoredData {
             mem_valid: HashMap::new(),
             tci_server: String::new(),
             follow_me: false,
+            tci_watchdog_secs: DEFAULT_WATCHDOG_SECS,
             cat_enabled: false,
             cat_status: String::new(),
+            cat_watchdog_secs: DEFAULT_WATCHDOG_SECS,
             rigctld_host: "127.0.0.1".to_string(),
             rigctld_port: 4532,
             rig_model_id: 0,
@@ -208,8 +221,10 @@ struct AppState {
     last_tci_band: Option<Bands>,
     pending_tci_band: Option<Bands>,
     tci_status: String,
+    tci_watchdog_secs: u64,
     cat_enabled: bool,
     cat_status: String,
+    cat_watchdog_secs: u64,
     rigctld_host: String,
     rigctld_port: u16,
     rig_model_id: i32,
@@ -326,8 +341,10 @@ async fn main() -> Result<(), std::io::Error> {
         last_tci_band: None,
         pending_tci_band: None,
         tci_status: "DISCONNECTED".to_string(),
+        tci_watchdog_secs: DEFAULT_WATCHDOG_SECS,
         cat_enabled: false,
         cat_status: "DISCONNECTED".to_string(),
+        cat_watchdog_secs: DEFAULT_WATCHDOG_SECS,
         rigctld_host: "127.0.0.1".to_string(),
         rigctld_port: 4532,
         rig_model_id: 0,
@@ -410,7 +427,13 @@ async fn config_post(
     };
     let mut state = state.lock().unwrap();
     println!("FormData: {:?}", form_data);
-    if form_data.contains_key("tci_server") || form_data.contains_key("follow_me") {
+    if form_data.contains_key("save_tci")
+        || form_data.contains_key("start_tci")
+        || form_data.contains_key("stop_tci")
+        || form_data.contains_key("tci_server")
+        || form_data.contains_key("follow_me")
+        || form_data.contains_key("tci_watchdog_secs")
+    {
         if let Some(server) = form_data.get("tci_server") {
             let server = server.trim();
             if server.is_empty() {
@@ -422,19 +445,41 @@ async fn config_post(
                 return Redirect::to("/config");
             }
         }
-        if let Some(follow) = form_data.get("follow_me") {
+        if let Some(secs) = form_data.get("tci_watchdog_secs") {
+            let secs = secs.trim();
+            if secs.is_empty() {
+                state.tci_watchdog_secs = DEFAULT_WATCHDOG_SECS;
+            } else if let Ok(parsed) = secs.parse::<u64>() {
+                state.tci_watchdog_secs = parsed.max(3);
+            } else {
+                state.status = "Invalid TCI watchdog seconds".to_string();
+                return Redirect::to("/config");
+            }
+        }
+        if form_data.contains_key("start_tci") {
+            state.follow_me = true;
+            state.cat_enabled = false;
+            state.pending_cat_band = None;
+            state.cat_status = "DISCONNECTED".to_string();
+        } else if form_data.contains_key("stop_tci") {
+            state.follow_me = false;
+        } else if let Some(follow) = form_data.get("follow_me") {
             state.follow_me = follow == "on";
         }
         if !state.follow_me {
             state.pending_tci_band = None;
         }
         state.status = format!(
-            "TCI settings updated (Follow Me: {})",
-            if state.follow_me { "ON" } else { "OFF" }
+            "TCI settings updated (Follow Me: {}, watchdog: {}s)",
+            if state.follow_me { "ON" } else { "OFF" },
+            state.tci_watchdog_secs
         );
     }
     if form_data.contains_key("save_cat")
+        || form_data.contains_key("start_cat")
+        || form_data.contains_key("stop_cat")
         || form_data.contains_key("cat_enabled")
+        || form_data.contains_key("cat_watchdog_secs")
         || form_data.contains_key("rigctld_host")
         || form_data.contains_key("rigctld_port")
         || form_data.contains_key("rig_model_id")
@@ -443,9 +488,29 @@ async fn config_post(
         || form_data.contains_key("rig_civaddr")
         || form_data.contains_key("rig_extra_conf")
     {
-        state.cat_enabled = form_data.get("cat_enabled").map(|v| v == "on").unwrap_or(false);
+        if form_data.contains_key("start_cat") {
+            state.cat_enabled = true;
+            state.follow_me = false;
+            state.pending_tci_band = None;
+            state.tci_status = "PAUSED".to_string();
+        } else if form_data.contains_key("stop_cat") {
+            state.cat_enabled = false;
+        } else {
+            state.cat_enabled = form_data.get("cat_enabled").map(|v| v == "on").unwrap_or(false);
+        }
         if !state.cat_enabled {
             state.pending_cat_band = None;
+        }
+        if let Some(secs) = form_data.get("cat_watchdog_secs") {
+            let secs = secs.trim();
+            if secs.is_empty() {
+                state.cat_watchdog_secs = DEFAULT_WATCHDOG_SECS;
+            } else if let Ok(parsed) = secs.parse::<u64>() {
+                state.cat_watchdog_secs = parsed.max(3);
+            } else {
+                state.status = "Invalid CAT watchdog seconds".to_string();
+                return Redirect::to("/config");
+            }
         }
         if let Some(host) = form_data.get("rigctld_host") {
             state.rigctld_host = host.trim().to_string();
@@ -479,8 +544,9 @@ async fn config_post(
             state.rig_extra_conf = extra.trim().to_string();
         }
         state.status = format!(
-            "CAT settings updated (Auto band: {})",
-            if state.cat_enabled { "ON" } else { "OFF" }
+            "CAT settings updated (Auto band: {}, watchdog: {}s)",
+            if state.cat_enabled { "ON" } else { "OFF" },
+            state.cat_watchdog_secs
         );
     }
     if state.cat_enabled && state.follow_me {
@@ -697,9 +763,11 @@ async fn config_get(State(state): State<Arc<Mutex<AppState>>>) -> Html<String> {
         tci_server: state.tci_server.clone(),
         follow_me: state.follow_me,
         tci_status: state.tci_status.clone(),
+        tci_watchdog_secs: state.tci_watchdog_secs,
         default_profile: state.default_profile.clone(),
         cat_enabled: state.cat_enabled,
         cat_status: state.cat_status.clone(),
+        cat_watchdog_secs: state.cat_watchdog_secs,
         rig_model_id: state.rig_model_id,
         rig_serial_device: state.rig_serial_device.clone(),
         rig_baud: state.rig_baud,
@@ -769,9 +837,6 @@ fn band_to_key(band: &Bands) -> &'static str {
     }
 }
 
-const TCI_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(15);
-const CAT_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(15);
-
 fn try_recall_pending_band(
     state: Arc<Mutex<AppState>>,
     source: &str,
@@ -805,10 +870,16 @@ fn try_recall_pending_band(
 
 async fn tci_follow_task(state: Arc<Mutex<AppState>>) {
     loop {
-        let (server, enabled, cat_enabled) = {
+        let (server, enabled, cat_enabled, watchdog_secs) = {
             let state_lck = state.lock().unwrap();
-            (state_lck.tci_server.clone(), state_lck.follow_me, state_lck.cat_enabled)
+            (
+                state_lck.tci_server.clone(),
+                state_lck.follow_me,
+                state_lck.cat_enabled,
+                state_lck.tci_watchdog_secs.max(3),
+            )
         };
+        let watchdog_timeout = Duration::from_secs(watchdog_secs);
 
         if cat_enabled {
             {
@@ -931,9 +1002,12 @@ async fn tci_follow_task(state: Arc<Mutex<AppState>>) {
                             if !state_lck.follow_me || state_lck.tci_server != server {
                                 break;
                             }
-                            if last_valid_tci_frame.elapsed() > TCI_WATCHDOG_TIMEOUT {
+                            if last_valid_tci_frame.elapsed() > watchdog_timeout {
                                 state_lck.tci_status = "ERROR".to_string();
-                                state_lck.status = "TCI watchdog: no frequency updates received, reconnecting".to_string();
+                                state_lck.status = format!(
+                                    "TCI watchdog: no frequency updates received for {}s, reconnecting",
+                                    watchdog_secs
+                                );
                                 println!("TCI watchdog: stale connection, reconnecting");
                                 break;
                             }
@@ -979,7 +1053,7 @@ async fn cat_follow_task(state: Arc<Mutex<AppState>>) {
             }
         }
 
-        let (enabled, model_id, device, baud, civaddr, extra_conf) = {
+        let (enabled, model_id, device, baud, civaddr, extra_conf, watchdog_secs) = {
             let state_lck = state.lock().unwrap();
             (
                 state_lck.cat_enabled,
@@ -988,8 +1062,10 @@ async fn cat_follow_task(state: Arc<Mutex<AppState>>) {
                 state_lck.rig_baud,
                 state_lck.rig_civaddr.clone(),
                 state_lck.rig_extra_conf.clone(),
+                state_lck.cat_watchdog_secs.max(3),
             )
         };
+        let watchdog_timeout = Duration::from_secs(watchdog_secs);
 
         if !enabled {
             {
@@ -1107,10 +1183,13 @@ async fn cat_follow_task(state: Arc<Mutex<AppState>>) {
                 cat_connected = false;
             }
         }
-        if cat_connected && last_valid_cat_poll.elapsed() > CAT_WATCHDOG_TIMEOUT {
+        if cat_connected && last_valid_cat_poll.elapsed() > watchdog_timeout {
             let mut state_lck = state.lock().unwrap();
             state_lck.cat_status = "ERROR".to_string();
-            state_lck.status = "CAT watchdog: no valid frequency updates received".to_string();
+            state_lck.status = format!(
+                "CAT watchdog: no valid frequency updates received for {}s",
+                watchdog_secs
+            );
             cat_connected = false;
             println!("CAT watchdog: stale polling state");
         }
@@ -1758,8 +1837,10 @@ fn sleep_save(state: Arc<Mutex<AppState>>) {
     saved_state.mem_valid = state_lck.mem_valid.clone();
     saved_state.tci_server = state_lck.tci_server.clone();
     saved_state.follow_me = state_lck.follow_me;
+    saved_state.tci_watchdog_secs = state_lck.tci_watchdog_secs;
     saved_state.cat_enabled = state_lck.cat_enabled;
     saved_state.cat_status = state_lck.cat_status.clone();
+    saved_state.cat_watchdog_secs = state_lck.cat_watchdog_secs;
     saved_state.rigctld_host = state_lck.rigctld_host.clone();
     saved_state.rigctld_port = state_lck.rigctld_port;
     saved_state.rig_model_id = state_lck.rig_model_id;
@@ -1930,7 +2011,9 @@ fn apply_profile_to_state(state: Arc<Mutex<AppState>>, file_name: &str, output: 
         state_lck.tci_server = output.tci_server;
     }
     state_lck.follow_me = output.follow_me;
+    state_lck.tci_watchdog_secs = output.tci_watchdog_secs.max(3);
     state_lck.cat_enabled = output.cat_enabled;
+    state_lck.cat_watchdog_secs = output.cat_watchdog_secs.max(3);
     if !state_lck.follow_me {
         state_lck.pending_tci_band = None;
     }

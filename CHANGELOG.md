@@ -18,6 +18,11 @@
 - Normalized stepper `max` handling during profile load/save and live encoder control so Tune/Ind/Load continue to work even if a saved position or stored band memory exceeds the previously saved max
 - Narrowed I2C warning status updates so background meter faults no longer overwrite unrelated operator actions like save/store/select confirmations
 - Added idle watchdogs for both TCI and CAT follow paths so stale "connected" sessions are only tolerated while those services are enabled and still receiving valid frequency updates
+- Made the TCI and CAT watchdog timers configurable from the config page and persisted them in profile save/load
+- Added explicit `Start` / `Stop` actions for both TCI and CAT on the config page
+- Enforced single-service follow behavior so enabling or starting CAT turns TCI off, and enabling or starting TCI turns CAT off
+- Reworked the config page into grouped sections for hardware setup, calibration, profiles, and radio follow, replacing the old assignment table with separate axis cards
+- Added LCD-specific config-page spacing and viewport containment so the touchscreen layout uses a tighter presentation than the desktop browser view
 
 ### Documentation
 
@@ -25,6 +30,7 @@
 - Documented the DSI LCD / Goodix touchscreen setup, touch-mapping troubleshooting steps, and installer behavior in the README
 - Documented the stepper max normalization and I2C status-message behavior in the README
 - Documented the new TCI/CAT follow watchdog behavior in the README
+- Documented the new config-page workflow, explicit follow-service controls, and installer provisioning expectations in the README
 
 ### Install and desktop setup
 

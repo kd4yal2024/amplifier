@@ -5,89 +5,369 @@
   <link rel="stylesheet" href="/static/amplifier.css">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Amplifier Config</title>
-
-  <!-- Scoped config-page polish (won't mess with main UI) -->
   <style>
     :root {
-      --cfg-bg: #f4f7fb;
+      --cfg-bg: #eef3f8;
       --cfg-panel: #ffffff;
-      --cfg-panel-2: #f8fafc;
+      --cfg-panel-soft: #f7fafc;
       --cfg-text: #0f172a;
       --cfg-muted: #556070;
       --cfg-border: #d7dde6;
-      --cfg-accent: #1e88e5;
+      --cfg-accent: #1e5fa8;
+      --cfg-ok: #1f7a43;
+      --cfg-warn: #a55b15;
+      --cfg-shadow: 0 16px 40px rgba(15, 23, 42, 0.12);
     }
-    body { background: var(--cfg-bg); color: var(--cfg-text); }
+
+    body {
+      background:
+        radial-gradient(circle at top left, rgba(30, 95, 168, 0.10), transparent 34%),
+        radial-gradient(circle at top right, rgba(16, 185, 129, 0.08), transparent 28%),
+        var(--cfg-bg);
+      color: var(--cfg-text);
+    }
+
     .cfg-page {
       min-height: 100vh;
+      padding: 24px;
       display: flex;
       justify-content: center;
       align-items: flex-start;
-      padding: 24px;
+      box-sizing: border-box;
     }
-    .cfg-card {
-      width: min(980px, 100%);
+
+    .cfg-shell {
+      width: min(1280px, 100%);
       background: var(--cfg-panel);
       border: 1px solid var(--cfg-border);
-      border-radius: 16px;
-      box-shadow: 0 16px 40px rgba(15, 23, 42, 0.12);
-      padding: 18px 18px 22px;
+      border-radius: 18px;
+      box-shadow: var(--cfg-shadow);
+      overflow: hidden;
     }
-    .cfg-title {
-      display: flex;
-      align-items: baseline;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 10px 12px 16px;
-      border-bottom: 1px solid var(--cfg-border);
-      margin-bottom: 14px;
-    }
-    .cfg-title h2 { margin: 0; font-family: "Sora","Space Grotesk","Rajdhani",sans-serif; }
-    .cfg-note { margin: 0; color: var(--cfg-muted); font-family: "Sora","Space Grotesk","Rajdhani",sans-serif; }
-    .cfg-row {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 14px;
-      margin: 12px 0 18px;
-    }
-    @media (max-width: 800px) { .cfg-row { grid-template-columns: 1fr; } }
 
-    .cfg-block {
+    .cfg-hero {
+      padding: 20px 22px 18px;
+      border-bottom: 1px solid var(--cfg-border);
+      background: linear-gradient(180deg, rgba(30, 95, 168, 0.08), rgba(255, 255, 255, 0));
+    }
+
+    .cfg-hero-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-start;
+      margin-bottom: 16px;
+    }
+
+    .cfg-hero h1 {
+      margin: 0 0 6px;
+      font: 700 30px/1.05 "Sora","Space Grotesk","Rajdhani",sans-serif;
+      letter-spacing: -0.03em;
+    }
+
+    .cfg-hero p {
+      margin: 0;
+      max-width: 760px;
+      color: var(--cfg-muted);
+      font: 500 14px/1.45 "Sora","Space Grotesk","Rajdhani",sans-serif;
+    }
+
+    .cfg-summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .cfg-summary-card {
       border: 1px solid var(--cfg-border);
       border-radius: 14px;
-      padding: 12px;
-      background: var(--cfg-panel-2);
+      background: rgba(255, 255, 255, 0.86);
+      padding: 12px 14px;
     }
-    .cfg-block h3 {
-      margin: 0 0 10px;
-      font-family: "Sora","Space Grotesk","Rajdhani",sans-serif;
-      font-size: 16px;
-    }
-    .cfg-block label, .cfg-block p {
-      font-family: "Sora","Space Grotesk","Rajdhani",sans-serif;
-      font-size: 14px;
+
+    .cfg-summary-card span {
+      display: block;
+      margin-bottom: 6px;
       color: var(--cfg-muted);
+      font: 600 11px/1.2 "Sora","Space Grotesk","Rajdhani",sans-serif;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
     }
-    .cfg-block select, .cfg-block input[type="text"] {
+
+    .cfg-summary-card strong {
+      display: block;
+      font: 700 16px/1.2 "Sora","Space Grotesk","Rajdhani",sans-serif;
+      overflow-wrap: anywhere;
+    }
+
+    .cfg-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      border: 1px solid var(--cfg-border);
+      background: #fff;
+      font: 700 11px/1.2 "Sora","Space Grotesk","Rajdhani",sans-serif;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      max-width: 100%;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+
+    .cfg-pill.ok {
+      color: var(--cfg-ok);
+      background: rgba(31, 122, 67, 0.08);
+      border-color: rgba(31, 122, 67, 0.24);
+    }
+
+    .cfg-pill.warn {
+      color: var(--cfg-warn);
+      background: rgba(165, 91, 21, 0.08);
+      border-color: rgba(165, 91, 21, 0.24);
+    }
+
+    .cfg-body {
+      padding: 18px 22px 22px;
+      display: grid;
+      gap: 18px;
+    }
+
+    .cfg-status {
+      border: 1px solid var(--cfg-border);
+      border-radius: 14px;
+      background: #fff;
+      padding: 12px 14px;
+    }
+
+    .cfg-status span {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--cfg-muted);
+      font: 600 11px/1.2 "Sora","Space Grotesk","Rajdhani",sans-serif;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .cfg-status div {
+      font: 600 14px/1.35 "Sora","Space Grotesk","Rajdhani",sans-serif;
+    }
+
+    .cfg-section {
+      border: 1px solid var(--cfg-border);
+      border-radius: 16px;
+      background: var(--cfg-panel-soft);
+      padding: 16px;
+    }
+
+    .cfg-section-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-start;
+      margin-bottom: 14px;
+    }
+
+    .cfg-section-head-left {
+      display: grid;
+      gap: 8px;
+      justify-items: start;
+      min-width: 0;
+    }
+
+    .cfg-section-head h2 {
+      margin: 0 0 4px;
+      font: 700 20px/1.1 "Sora","Space Grotesk","Rajdhani",sans-serif;
+      letter-spacing: -0.02em;
+    }
+
+    .cfg-section-head p {
+      margin: 0;
+      color: var(--cfg-muted);
+      font: 500 13px/1.45 "Sora","Space Grotesk","Rajdhani",sans-serif;
+      max-width: 760px;
+    }
+
+    .cfg-grid-2,
+    .cfg-grid-3 {
+      display: grid;
+      gap: 14px;
+      align-items: start;
+    }
+
+    .cfg-grid-2 {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .cfg-grid-3 {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .cfg-card {
+      border: 1px solid var(--cfg-border);
+      border-radius: 14px;
+      background: #fff;
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .cfg-card h3 {
+      margin: 0;
+      font: 700 17px/1.15 "Sora","Space Grotesk","Rajdhani",sans-serif;
+    }
+
+    .cfg-card p,
+    .cfg-card label,
+    .cfg-card li {
+      margin: 0;
+      color: var(--cfg-muted);
+      font: 500 13px/1.45 "Sora","Space Grotesk","Rajdhani",sans-serif;
+    }
+
+    .cfg-card form {
+      display: grid;
+      gap: 10px;
+    }
+
+    .cfg-field {
+      display: grid;
+      gap: 5px;
+      min-width: 0;
+    }
+
+    .cfg-field label {
+      color: var(--cfg-text);
+      font-weight: 600;
+    }
+
+    .cfg-card select,
+    .cfg-card input[type="text"] {
       display: block;
       width: 100%;
-      max-width: 260px;
-      padding: 8px 10px;
-      margin: 6px 0 10px;
-      background: #ffffff;
-      color: var(--cfg-text);
+      max-width: none;
+      box-sizing: border-box;
+      padding: 9px 10px;
       border: 1px solid var(--cfg-border);
       border-radius: 10px;
+      background: #fff;
+      color: var(--cfg-text);
+      font: 600 13px/1.2 "Sora","Space Grotesk","Rajdhani",sans-serif;
+    }
+
+    .cfg-inline-check {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      color: var(--cfg-text);
     }
 
     .cfg-actions {
       display: flex;
       flex-wrap: wrap;
       gap: 10px;
-      margin-top: 8px;
+      align-items: center;
     }
 
-    .button:disabled {
+    .cfg-subtle {
+      color: var(--cfg-muted);
+      font: 500 12px/1.4 "Sora","Space Grotesk","Rajdhani",sans-serif;
+      overflow-wrap: anywhere;
+    }
+
+    .cfg-assignments {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .cfg-assignment {
+      border: 1px solid var(--cfg-border);
+      border-radius: 12px;
+      background: #fff;
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .cfg-assignment h3 {
+      margin: 0;
+      font: 700 16px/1.15 "Sora","Space Grotesk","Rajdhani",sans-serif;
+    }
+
+    .cfg-meta {
+      display: grid;
+      gap: 6px;
+    }
+
+    .cfg-meta-row {
+      display: grid;
+      grid-template-columns: 56px minmax(0, 1fr);
+      gap: 8px;
+      font: 600 12px/1.3 "Sora","Space Grotesk","Rajdhani",sans-serif;
+    }
+
+    .cfg-meta-row span {
+      color: var(--cfg-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      font-size: 10px;
+      align-self: start;
+    }
+
+    .cfg-meta-row strong {
+      overflow-wrap: anywhere;
+    }
+
+    .cfg-cal-actions {
+      display: grid;
+      gap: 8px;
+    }
+
+    .cfg-assignment.compact {
+      padding: 10px;
+      gap: 8px;
+    }
+
+    .cfg-assignment.compact h3 {
+      font-size: 15px;
+    }
+
+    .cfg-assignment.compact .cfg-meta-row {
+      grid-template-columns: 48px minmax(0, 1fr);
+      gap: 6px;
+      font-size: 11px;
+    }
+
+    .cfg-assignment.compact .cfg-meta-row span {
+      font-size: 9px;
+    }
+
+    .cfg-assignment.compact .button,
+    .cfg-assignment.compact input[type="submit"] {
+      min-height: 38px;
+      font-size: 12px;
+    }
+
+    .cfg-footer {
+      display: flex;
+      justify-content: center;
+      padding-top: 4px;
+    }
+
+    .cfg-section-head > * {
+      min-width: 0;
+    }
+
+    .cfg-section-head .cfg-pill {
+      justify-content: center;
+      text-align: center;
+    }
+
+    .button:disabled,
+    input[type="submit"]:disabled {
       opacity: 0.45;
       cursor: not-allowed;
       box-shadow: none;
@@ -104,346 +384,646 @@
       -webkit-tap-highlight-color: transparent;
     }
 
-    .cfg-status {
-      margin-top: 14px;
-      padding: 10px 12px;
-      border: 1px solid var(--cfg-border);
-      border-radius: 12px;
-      background: #ffffff;
-      font-family: "Sora","Space Grotesk","Rajdhani",sans-serif;
-      color: var(--cfg-text);
+    @media (max-width: 980px) {
+      .cfg-summary,
+      .cfg-grid-3 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .cfg-assignments {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 760px) {
+      .cfg-page {
+        padding: 12px;
+      }
+
+      .cfg-hero-top,
+      .cfg-section-head,
+      .cfg-grid-2,
+      .cfg-grid-3,
+      .cfg-summary,
+      .cfg-assignments {
+        grid-template-columns: 1fr;
+        flex-direction: column;
+      }
+
+      .cfg-hero,
+      .cfg-body {
+        padding-left: 14px;
+        padding-right: 14px;
+      }
+
+      .cfg-actions {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .cfg-pill {
+        width: 100%;
+        justify-content: center;
+      }
+    }
+
+    @media (max-width: 1366px), (max-height: 860px) {
+      .cfg-page {
+        padding: 12px;
+      }
+
+      .cfg-shell {
+        width: min(1180px, 100%);
+      }
+
+      .cfg-hero {
+        padding: 14px 16px 12px;
+      }
+
+      .cfg-hero-top {
+        margin-bottom: 12px;
+        gap: 12px;
+      }
+
+      .cfg-hero h1 {
+        font-size: 24px;
+      }
+
+      .cfg-hero p,
+      .cfg-section-head p,
+      .cfg-card p,
+      .cfg-card label,
+      .cfg-card li {
+        font-size: 12px;
+      }
+
+      .cfg-summary {
+        gap: 10px;
+      }
+
+      .cfg-summary-card {
+        padding: 10px 12px;
+      }
+
+      .cfg-summary-card strong {
+        font-size: 14px;
+      }
+
+      .cfg-body {
+        padding: 14px 16px 16px;
+        gap: 14px;
+      }
+
+      .cfg-section {
+        padding: 12px;
+      }
+
+      .cfg-section-head {
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+
+      .cfg-section-head h2 {
+        font-size: 18px;
+      }
+
+      .cfg-grid-2,
+      .cfg-grid-3,
+      .cfg-assignments {
+        gap: 10px;
+      }
+
+      .cfg-card {
+        padding: 11px;
+        gap: 10px;
+      }
+
+      .cfg-card h3,
+      .cfg-assignment h3 {
+        font-size: 15px;
+      }
+
+      .cfg-card select,
+      .cfg-card input[type="text"] {
+        padding: 7px 8px;
+        font-size: 12px;
+      }
+
+      .cfg-actions {
+        gap: 8px;
+      }
+
+      .cfg-assignment.compact {
+        padding: 8px;
+        gap: 6px;
+      }
+
+      .cfg-assignment.compact .button,
+      .cfg-assignment.compact input[type="submit"] {
+        min-height: 34px;
+        font-size: 11px;
+      }
+    }
+
+    @media (max-height: 820px) {
+      .cfg-page {
+        padding: 6px;
+        min-height: 100dvh;
+      }
+
+      .cfg-shell {
+        max-height: calc(100dvh - 12px);
+        display: grid;
+        grid-template-rows: auto 1fr;
+      }
+
+      .cfg-hero {
+        padding: 10px 12px 8px;
+      }
+
+      .cfg-hero h1 {
+        font-size: 20px;
+      }
+
+      .cfg-summary-card {
+        padding: 7px 9px;
+      }
+
+      .cfg-body {
+        padding: 10px 12px 12px;
+        gap: 10px;
+        overflow-y: auto;
+        min-height: 0;
+      }
+
+      .cfg-section {
+        padding: 8px;
+      }
+
+      .cfg-card {
+        padding: 8px;
+        gap: 7px;
+      }
+
+      .cfg-card h3,
+      .cfg-assignment h3 {
+        font-size: 13px;
+      }
+
+      .cfg-section-head {
+        gap: 10px;
+        margin-bottom: 8px;
+      }
+
+      .cfg-section-head h2 {
+        font-size: 16px;
+      }
+
+      .cfg-card select,
+      .cfg-card input[type="text"] {
+        padding: 6px 7px;
+        font-size: 11px;
+      }
+
+      .cfg-actions {
+        gap: 6px;
+      }
+
+      .cfg-summary {
+        gap: 8px;
+      }
+
+      .cfg-grid-2,
+      .cfg-grid-3,
+      .cfg-assignments {
+        gap: 8px;
+      }
+
+      .cfg-assignment.compact .button,
+      .cfg-assignment.compact input[type="submit"] {
+        min-height: 30px;
+        font-size: 10px;
+      }
     }
   </style>
 </head>
-
 <body>
 <div class="cfg-page">
-  <div class="cfg-card">
-
-    <div class="cfg-title">
-      <h2>Amplifier Configuration</h2>
-      <p class="cfg-note">PIN 16 Reserved as Enable pin.</p>
-    </div>
-
-    {% if enc == false %}
-    <div class="cfg-row">
-      <div class="cfg-block">
-        <h3>Encoder</h3>
-        <form id="enc_form" action="/config" method="post" enctype="multipart/form-data">
-          <label for="PinA">Pin A:</label>
-          <select name="PinA" id="PinA">
-            <option value=""></option>
-            {% for pin in pins %}
-            <option value="{{pin}}">{{pin}}</option>
-            {% endfor %}
-          </select>
-
-          <label for="PinB">Pin B:</label>
-          <select name="PinB" id="PinB">
-            <option value=""></option>
-            {% for pin in pins %}
-            <option value="{{pin}}">{{pin}}</option>
-            {% endfor %}
-          </select>
-
-          <div class="cfg-actions">
-            <input id="add_enc_btn" name="add_enc" type="submit" value="Add Enc" />
-          </div>
-        </form>
+  <div class="cfg-shell">
+    <header class="cfg-hero">
+      <div class="cfg-hero-top">
+        <div>
+          <h1>Amplifier Configuration</h1>
+          <p>Set up hardware, calibrate Tune, Inductor, and Load, manage profiles, and configure radio-follow services without changing the control logic underneath.</p>
+        </div>
+        <button name="exit" class="button" id="exit" type="button">Return To Main UI</button>
       </div>
 
-      <div class="cfg-block">
-        <h3>Callsign</h3>
-        <form action="#" method="post" enctype="multipart/form-data">
-          <input type="text" name="call_sign" placeholder="e.g. KD4YAI" />
-          <input type="submit" name="submit" value="Add_callsing">
-        </form>
-      </div>
-    </div>
-
-    {% else %}
-    <div class="cfg-row">
-      <div class="cfg-block">
-        <h3>Stepper Setup</h3>
-
-        <form id="stepper_button_form" action="#" method="post" enctype="multipart/form-data">
-          <label for="PinA">Pin A:</label>
-          <select name="PinA" id="PinA">
-            <option value=""></option>
-            {% for pin in pins %}
-            <option value="{{pin}}">{{pin}}</option>
-            {% endfor %}
-          </select>
-
-          <label for="PinB">Pin B:</label>
-          <select name="PinB" id="PinB">
-            <option value=""></option>
-            {% for pin in pins %}
-            <option value="{{pin}}">{{pin}}</option>
-            {% endfor %}
-          </select>
-
-          <label for="ratio">Choose Ratio:</label>
-          <select name="ratio" id="ratio">
-            <option value=""></option>
-            <option value="1">1</option>
-            <option value="2">2</option>
-            <option value="3">3</option>
-            <option value="4">4</option>
-            <option value="5">5</option>
-            <option value="6">6</option>
-            <option value="7">7</option>
-            <option value="8">8</option>
-            <option value="9">9</option>
-            <option value="10">10</option>
-          </select>
-        </form>
-
-        <div class="cfg-actions">
-          <button id="add_tune" name="add_tune" class="button" form="stepper_button_form" type="submit" value="Add Tune" disabled>Add Tune</button>
-          <button id="add_ind"  name="add_ind"  class="button" form="stepper_button_form" type="submit" value="Add Ind"  disabled>Add Ind</button>
-          <button id="add_load" name="add_load" class="button" form="stepper_button_form" type="submit" value="Add "      disabled>Add Load</button>
+      <div class="cfg-summary">
+        <div class="cfg-summary-card">
+          <span>Encoder</span>
+          <strong>{% if enc %}Configured{% else %}Not Configured{% endif %}</strong>
+        </div>
+        <div class="cfg-summary-card">
+          <span>Default Profile</span>
+          <strong>{% if default_profile != "" %}{{ default_profile }}{% else %}None Selected{% endif %}</strong>
+        </div>
+        <div class="cfg-summary-card">
+          <span>TCI Status</span>
+          <strong class="cfg-pill {% if tci_status == "CONNECTED" %}ok{% else %}warn{% endif %}">{{ tci_status }}</strong>
+        </div>
+        <div class="cfg-summary-card">
+          <span>CAT Status</span>
+          <strong class="cfg-pill {% if cat_status == "CONNECTED" %}ok{% else %}warn{% endif %}">{{ cat_status }}</strong>
         </div>
       </div>
+    </header>
 
-      <div class="cfg-block">
-        <h3>Callsign</h3>
-        <form action="#" method="post" enctype="multipart/form-data">
-          <input type="text" name="call_sign" placeholder="e.g. KD4YAI" />
-          <input type="submit" name="submit" value="Add_callsing">
-        </form>
-      </div>
-    </div>
-    {% endif %}
+    <main class="cfg-body">
+      <section class="cfg-status">
+        <span>Latest Status</span>
+        <div id="status_bar">Open the main page and operate a control, then the latest status will appear here.</div>
+      </section>
 
-    <div class="cfg-block">
-      <h3>Current Assignments</h3>
+      <section class="cfg-section">
+        <div class="cfg-section-head">
+          <div class="cfg-section-head-left">
+            <h2>Hardware Setup</h2>
+            <p>One-time wiring tasks live here: encoder pins, stepper pin assignment, ratio selection, and callsign updates.</p>
+            <span class="cfg-pill">Pin 16 reserved for Enable</span>
+          </div>
+        </div>
 
-      <table>
-        <tr>
-          <th>Field</th>
-          <th>Enc</th>
-          <th>Tune</th>
-          <th>Inductor</th>
-          <th>Load</th>
-        </tr>
-        <tr>
-          <td>Pin 1</td>
-          <td class="pinA"></td>
-          <td class="pinA"></td>
-          <td class="pinA"></td>
-          <td class="pinA"></td>
-        </tr>
-        <tr>
-          <td>Pin 2</td>
-          <td class="pinB"></td>
-          <td class="pinB"></td>
-          <td class="pinB"></td>
-          <td class="pinB"></td>
-        </tr>
-        <tr>
-          <td>Ratio</td>
-          <td></td>
-          <td class="ratio"></td>
-          <td class="ratio"></td>
-          <td class="ratio"></td>
-        </tr>
-        <tr>
-          <td>Func</td>
-          <td>
+        <div class="cfg-grid-2">
+          <article class="cfg-card">
+            <h3>Encoder</h3>
+            {% if enc == false %}
+            <p>Select both encoder pins, then add the encoder.</p>
+            <form id="enc_form" action="/config" method="post" enctype="multipart/form-data">
+              <div class="cfg-field">
+                <label for="enc_pin_a">Pin A</label>
+                <select name="PinA" id="enc_pin_a">
+                  <option value=""></option>
+                  {% for pin in pins %}
+                  <option value="{{pin}}">{{pin}}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="cfg-field">
+                <label for="enc_pin_b">Pin B</label>
+                <select name="PinB" id="enc_pin_b">
+                  <option value=""></option>
+                  {% for pin in pins %}
+                  <option value="{{pin}}">{{pin}}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="cfg-actions">
+                <input id="add_enc_btn" name="add_enc" type="submit" value="Add Encoder" />
+              </div>
+            </form>
+            {% else %}
+            <div class="cfg-meta">
+              <div class="cfg-meta-row"><span>Pin A</span><strong id="summary-enc-a"></strong></div>
+              <div class="cfg-meta-row"><span>Pin B</span><strong id="summary-enc-b"></strong></div>
+            </div>
+            <div class="cfg-actions">
+              <form action="#" method="post" enctype="multipart/form-data">
+                <input name="del_enc" type="submit" value="Remove Encoder" />
+              </form>
+            </div>
+            {% endif %}
+          </article>
+
+          <article class="cfg-card">
+            <h3>Callsign</h3>
+            <p>Update the displayed station callsign here.</p>
+            <form action="#" method="post" enctype="multipart/form-data">
+              <div class="cfg-field">
+                <label for="call_sign">Callsign</label>
+                <input id="call_sign" type="text" name="call_sign" placeholder="e.g. KD4YAI" />
+              </div>
+              <div class="cfg-actions">
+                <input type="submit" name="submit" value="Save Callsign" />
+              </div>
+            </form>
+          </article>
+        </div>
+
+        {% if enc %}
+        <div class="cfg-grid-2" style="margin-top: 14px;">
+          <article class="cfg-card">
+            <h3>Stepper Assignment Builder</h3>
+            <p>Choose both stepper pins and a ratio first, then add the axis you want to create.</p>
+            <form id="stepper_button_form" action="#" method="post" enctype="multipart/form-data">
+              <div class="cfg-field">
+                <label for="stepper_pin_a">Pin A</label>
+                <select name="PinA" id="stepper_pin_a">
+                  <option value=""></option>
+                  {% for pin in pins %}
+                  <option value="{{pin}}">{{pin}}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="cfg-field">
+                <label for="stepper_pin_b">Pin B</label>
+                <select name="PinB" id="stepper_pin_b">
+                  <option value=""></option>
+                  {% for pin in pins %}
+                  <option value="{{pin}}">{{pin}}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="cfg-field">
+                <label for="stepper_ratio">Ratio</label>
+                <select name="ratio" id="stepper_ratio">
+                  <option value=""></option>
+                  <option value="1">1</option>
+                  <option value="2">2</option>
+                  <option value="3">3</option>
+                  <option value="4">4</option>
+                  <option value="5">5</option>
+                  <option value="6">6</option>
+                  <option value="7">7</option>
+                  <option value="8">8</option>
+                  <option value="9">9</option>
+                  <option value="10">10</option>
+                </select>
+              </div>
+            </form>
+            <div class="cfg-actions">
+              <button id="add_tune" name="add_tune" class="button" form="stepper_button_form" type="submit" disabled>Add Tune</button>
+              <button id="add_ind" name="add_ind" class="button" form="stepper_button_form" type="submit" disabled>Add Inductor</button>
+              <button id="add_load" name="add_load" class="button" form="stepper_button_form" type="submit" disabled>Add Load</button>
+            </div>
+          </article>
+
+          <article class="cfg-card">
+            <h3>Calibration Workflow</h3>
+            <p>1. Select Tune, Inductor, or Load on the main page.</p>
+            <p>2. Move the selected axis with the encoder.</p>
+            <p>3. Return here and set Start or Max for that axis.</p>
+            <p class="cfg-subtle">Use Reset Max if you need to clear the saved upper limit and recalibrate it.</p>
+          </article>
+        </div>
+        {% endif %}
+      </section>
+
+      <section class="cfg-section">
+        <div class="cfg-section-head">
+          <div>
+            <h2>Stepper Calibration and Features</h2>
+            <p>Review current assignments and apply calibration actions per axis. This replaces the old table with separate cards so each axis is easier to work with.</p>
+          </div>
+        </div>
+
+        <div class="cfg-assignments">
+          <article class="cfg-assignment compact">
+            <h3>Encoder</h3>
+            <div class="cfg-meta">
+              <div class="cfg-meta-row"><span>Pin A</span><strong id="card-enc-a"></strong></div>
+              <div class="cfg-meta-row"><span>Pin B</span><strong id="card-enc-b"></strong></div>
+              <div class="cfg-meta-row"><span>Status</span><strong>{% if enc_val[0] != "None" && enc_val[1] != "None" %}Ready{% else %}Not Assigned{% endif %}</strong></div>
+            </div>
             {% if enc_val[0] != "None" && enc_val[1] != "None" %}
             <form action="#" method="post" enctype="multipart/form-data">
-              <input name="del_enc" type="submit" value="Del" />
+              <input name="del_enc" type="submit" value="Remove Encoder" />
             </form>
             {% endif %}
-          </td>
-          <td>
+          </article>
+
+          <article class="cfg-assignment compact">
+            <h3>Tune</h3>
+            <div class="cfg-meta">
+              <div class="cfg-meta-row"><span>Pin A</span><strong id="card-tune-a"></strong></div>
+              <div class="cfg-meta-row"><span>Pin B</span><strong id="card-tune-b"></strong></div>
+              <div class="cfg-meta-row"><span>Ratio</span><strong id="card-tune-ratio"></strong></div>
+              <div class="cfg-meta-row"><span>Status</span><strong>{% if tune[0] != "None" && tune[1] != "None" %}Ready{% else %}Not Assigned{% endif %}</strong></div>
+            </div>
             {% if tune[0] != "None" && tune[1] != "None" %}
+            <div class="cfg-cal-actions">
+              <button class="set_range button" name="tune_start" id="tune_start_btn" type="button">Set Start</button>
+              <button class="set_range button" name="tune_max" id="tune_max_btn" type="button">Set Max</button>
+              <button class="set_range button" name="tune_reset" id="tune_rst_btn" type="button">Reset Max</button>
+            </div>
             <form action="#" method="post" enctype="multipart/form-data">
-              <input name="del_tune" type="submit" value="Del" />
+              <input name="del_tune" type="submit" value="Remove Tune" />
             </form>
-            <button class="set_range" name="tune_start" id="tune_start_btn" value="zero" type="button">Set Start</button><br>
-            <button class="set_range" name="tune_max"   id="tune_max_btn"   value="max"  type="button">Set Max</button><br>
-            <button class="set_range" name="tune_reset" id="tune_rst_btn"   value="reset" type="button">Reset Max</button>
             {% endif %}
-          </td>
-          <td>
+          </article>
+
+          <article class="cfg-assignment compact">
+            <h3>Inductor</h3>
+            <div class="cfg-meta">
+              <div class="cfg-meta-row"><span>Pin A</span><strong id="card-ind-a"></strong></div>
+              <div class="cfg-meta-row"><span>Pin B</span><strong id="card-ind-b"></strong></div>
+              <div class="cfg-meta-row"><span>Ratio</span><strong id="card-ind-ratio"></strong></div>
+              <div class="cfg-meta-row"><span>Status</span><strong>{% if ind[0] != "None" && ind[1] != "None" %}Ready{% else %}Not Assigned{% endif %}</strong></div>
+            </div>
             {% if ind[0] != "None" && ind[1] != "None" %}
+            <div class="cfg-cal-actions">
+              <button class="set_range button" name="ind_start" id="ind_start_btn" type="button">Set Start</button>
+              <button class="set_range button" name="ind_max" id="ind_max_btn" type="button">Set Max</button>
+              <button class="set_range button" name="ind_reset" id="ind_rst_btn" type="button">Reset Max</button>
+            </div>
             <form action="#" method="post" enctype="multipart/form-data">
-              <input name="del_ind" type="submit" value="Del" />
+              <input name="del_ind" type="submit" value="Remove Inductor" />
             </form>
-            <button class="set_range" name="ind_start" id="ind_start_btn" value="zero" type="button">Set Start</button><br>
-            <button class="set_range" name="ind_max"   id="ind_max_btn"   value="max"  type="button">Set Max</button><br>
-            <button class="set_range" name="ind_reset" id="ind_rst_btn"   value="reset" type="button">Reset Max</button>
             {% endif %}
-          </td>
-          <td>
-            {% if  load[0] != "None" && load[1] != "None" %}
+          </article>
+
+          <article class="cfg-assignment compact">
+            <h3>Load</h3>
+            <div class="cfg-meta">
+              <div class="cfg-meta-row"><span>Pin A</span><strong id="card-load-a"></strong></div>
+              <div class="cfg-meta-row"><span>Pin B</span><strong id="card-load-b"></strong></div>
+              <div class="cfg-meta-row"><span>Ratio</span><strong id="card-load-ratio"></strong></div>
+              <div class="cfg-meta-row"><span>Status</span><strong>{% if load[0] != "None" && load[1] != "None" %}Ready{% else %}Not Assigned{% endif %}</strong></div>
+            </div>
+            {% if load[0] != "None" && load[1] != "None" %}
+            <div class="cfg-cal-actions">
+              <button class="set_range button" name="load_start" id="load_start_btn" type="button">Set Start</button>
+              <button class="set_range button" name="load_max" id="load_max_btn" type="button">Set Max</button>
+              <button class="set_range button" name="load_reset" id="load_rst_btn" type="button">Reset Max</button>
+            </div>
             <form action="#" method="post" enctype="multipart/form-data">
-              <input name="del_load" type="submit" value="Del" />
+              <input name="del_load" type="submit" value="Remove Load" />
             </form>
-            <button class="set_range" name="load_start" id="load_start_btn" value="zero" type="button">Set Start</button><br>
-            <button class="set_range" name="load_max"   id="load_max_btn"   value="max"  type="button">Set Max</button><br>
-            <button class="set_range" name="load_reset" id="load_rst_btn"   value="reset" type="button">Reset Max</button>
             {% endif %}
-          </td>
-        </tr>
-      </table>
+          </article>
+        </div>
+      </section>
 
-      <div class="cfg-status">
-        <div id="status_bar"></div>
-      </div>
-    </div>
-
-    <div class="cfg-row">
-      <div class="cfg-block">
-        <h3>Load Saved Profile</h3>
-        <form id="select_file" action="/load" method="post" enctype="multipart/form-data">
-          <label for="files">Choose a file:</label>
-          <select name="files" id="files">
-            <option value=""></option>
-            {% for file in files %}
-            <option value="{{file}}">{{file}}</option>
-            {% endfor %}
-          </select>
-          <label>
-            <input type="checkbox" name="default_profile" value="on" />
-            Set as default on startup
-          </label>
-          {% if default_profile != "" %}
-          <p>Current default: {{ default_profile }}</p>
-          {% endif %}
-          <div class="cfg-actions">
-            <input name="load" type="submit" value="Load">
-            <input name="clear_default" type="submit" value="Clear Default">
+      <section class="cfg-section">
+        <div class="cfg-section-head">
+          <div>
+            <h2>Profiles</h2>
+            <p>Load a saved operating profile, set a startup default, or write the current state to a new filename.</p>
           </div>
-        </form>
-      </div>
+        </div>
 
-      <div class="cfg-block">
-        <h3>Follow Me (TCI)</h3>
-        <form action="/config" method="post" enctype="multipart/form-data">
-          <label for="tci_server">TCI Server (ws://host:port)</label>
-          <input
-            type="text"
-            id="tci_server"
-            name="tci_server"
-            placeholder="e.g. ws://192.168.0.108:50001"
-            pattern="wss?://.+"
-            title="Enter a ws:// or wss:// URL"
-            value="{{ tci_server }}"
-          />
-          <label>
-            <input type="hidden" name="follow_me" value="off" />
-            <input type="checkbox" name="follow_me" value="on" {% if follow_me %}checked{% endif %} />
-            Enable Follow Me
-          </label>
-          <div class="cfg-actions">
-            <input name="save_tci" type="submit" value="Save TCI Settings" />
+        <div class="cfg-grid-2">
+          <article class="cfg-card">
+            <h3>Load Saved Profile</h3>
+            <form id="select_file" action="/load" method="post" enctype="multipart/form-data">
+              <div class="cfg-field">
+                <label for="files">Saved Profiles</label>
+                <select name="files" id="files">
+                  <option value=""></option>
+                  {% for file in files %}
+                  <option value="{{file}}">{{file}}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <label class="cfg-inline-check">
+                <input type="checkbox" name="default_profile" value="on" />
+                Set as default on startup
+              </label>
+              <p>{% if default_profile != "" %}<strong>Current default:</strong> {{ default_profile }}{% else %}<strong>Current default:</strong> None selected{% endif %}</p>
+              <div class="cfg-actions">
+                <input name="load" type="submit" value="Load Profile">
+                <input name="clear_default" type="submit" value="Clear Default">
+              </div>
+            </form>
+          </article>
+
+          <article class="cfg-card">
+            <h3>Save Current Profile</h3>
+            <form id="input_file" action="/load" method="post" enctype="multipart/form-data">
+              <div class="cfg-field">
+                <label for="file_name">Filename</label>
+                <input id="file_name" name="file_name" type="text" placeholder="example-profile" />
+              </div>
+              <div class="cfg-actions">
+                <input name="save" type="submit" value="Save Profile" />
+              </div>
+            </form>
+            <p class="cfg-subtle">Saves tune, inductor, load, encoder, and follow settings into a JSON profile.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="cfg-section">
+        <div class="cfg-section-head">
+          <div>
+            <h2>Radio Follow</h2>
+            <p>Configure TCI or CAT control. Only one follow path can be active at a time, and each path has its own configurable watchdog timer.</p>
           </div>
-        </form>
-        <p>TCI Status: <strong>{{ tci_status }}</strong></p>
-        <p>When enabled, band changes from the radio will auto‑recall the stored band.</p>
+          <span class="cfg-pill warn">One Active Service</span>
+        </div>
+
+        <div class="cfg-grid-2">
+          <article class="cfg-card">
+            <h3>Follow Me (TCI)</h3>
+            <form action="/config" method="post" enctype="multipart/form-data">
+              <div class="cfg-field">
+                <label for="tci_server">TCI Server</label>
+                <input
+                  type="text"
+                  id="tci_server"
+                  name="tci_server"
+                  placeholder="e.g. ws://192.168.0.108:50001"
+                  pattern="wss?://.+"
+                  title="Enter a ws:// or wss:// URL"
+                  value="{{ tci_server }}"
+                />
+              </div>
+              <div class="cfg-field">
+                <label for="tci_watchdog_secs">Watchdog Seconds</label>
+                <input type="text" id="tci_watchdog_secs" name="tci_watchdog_secs" value="{{ tci_watchdog_secs }}" />
+              </div>
+              <label class="cfg-inline-check">
+                <input type="hidden" name="follow_me" value="off" />
+                <input type="checkbox" id="follow_me" name="follow_me" value="on" {% if follow_me %}checked{% endif %} />
+                Enable Follow Me
+              </label>
+              <div class="cfg-actions">
+                <input name="save_tci" type="submit" value="Save TCI Settings" />
+                <input name="start_tci" type="submit" value="Start TCI" />
+                <input name="stop_tci" type="submit" value="Stop TCI" />
+              </div>
+            </form>
+            <p>TCI Status: <strong>{{ tci_status }}</strong></p>
+            <p class="cfg-subtle">Radio band changes auto-recall the saved band. Starting TCI automatically stops CAT.</p>
+          </article>
+
+          <article class="cfg-card">
+            <h3>CAT Control (Hamlib)</h3>
+            <form action="/config" method="post" enctype="multipart/form-data">
+              <label class="cfg-inline-check">
+                <input type="checkbox" id="cat_enabled" name="cat_enabled" value="on" {% if cat_enabled %}checked{% endif %} />
+                Enable CAT auto band
+              </label>
+              <div class="cfg-field">
+                <label for="cat_watchdog_secs">Watchdog Seconds</label>
+                <input type="text" id="cat_watchdog_secs" name="cat_watchdog_secs" value="{{ cat_watchdog_secs }}" />
+              </div>
+              <div class="cfg-field">
+                <label for="rig_model_id">Rig Model ID</label>
+                <input type="text" id="rig_model_id" name="rig_model_id" placeholder="e.g. 307" value="{{ rig_model_id }}" />
+              </div>
+              <div class="cfg-field">
+                <label for="rig_serial_device">Serial Device</label>
+                <input type="text" id="rig_serial_device" name="rig_serial_device" placeholder="/dev/serial/by-id/..." value="{{ rig_serial_device }}" />
+              </div>
+              <div class="cfg-field">
+                <label for="rig_baud">Baud</label>
+                <input type="text" id="rig_baud" name="rig_baud" placeholder="e.g. 115200" value="{{ rig_baud }}" />
+              </div>
+              <div class="cfg-field">
+                <label for="rig_civaddr">CI-V Address</label>
+                <input type="text" id="rig_civaddr" name="rig_civaddr" placeholder="e.g. 0x94" value="{{ rig_civaddr }}" />
+              </div>
+              <div class="cfg-field">
+                <label for="rig_extra_conf">Extra Hamlib Config</label>
+                <input type="text" id="rig_extra_conf" name="rig_extra_conf" placeholder="e.g. stop_bits=1" value="{{ rig_extra_conf }}" />
+              </div>
+              <div class="cfg-actions">
+                <input name="save_cat" type="submit" value="Save CAT Settings" />
+                <input name="start_cat" type="submit" value="Start CAT" />
+                <input name="stop_cat" type="submit" value="Stop CAT" />
+              </div>
+            </form>
+            <p>CAT Status: <strong>{{ cat_status }}</strong></p>
+            <p class="cfg-subtle">CAT polls the rig for frequency and recalls the matching band. Starting CAT automatically stops TCI.</p>
+          </article>
+        </div>
+      </section>
+
+      <div class="cfg-footer">
+        <button name="exit_footer" class="button" id="exit_footer" type="button">Return To Main UI</button>
       </div>
-
-      <div class="cfg-block">
-        <h3>CAT Control (Hamlib)</h3>
-        <form action="/config" method="post" enctype="multipart/form-data">
-          <label>
-            <input type="checkbox" name="cat_enabled" value="on" {% if cat_enabled %}checked{% endif %} />
-            Enable CAT auto band
-          </label>
-          <label for="rig_model_id">Rig Model ID (Hamlib)</label>
-          <input
-            type="text"
-            id="rig_model_id"
-            name="rig_model_id"
-            placeholder="e.g. 307"
-            value="{{ rig_model_id }}"
-          />
-          <label for="rig_serial_device">Serial Device</label>
-          <input
-            type="text"
-            id="rig_serial_device"
-            name="rig_serial_device"
-            placeholder="/dev/serial/by-id/..."
-            value="{{ rig_serial_device }}"
-          />
-          <label for="rig_baud">Baud</label>
-          <input
-            type="text"
-            id="rig_baud"
-            name="rig_baud"
-            placeholder="e.g. 115200"
-            value="{{ rig_baud }}"
-          />
-          <label for="rig_civaddr">CI-V Address (optional)</label>
-          <input
-            type="text"
-            id="rig_civaddr"
-            name="rig_civaddr"
-            placeholder="e.g. 0x94"
-            value="{{ rig_civaddr }}"
-          />
-          <label for="rig_extra_conf">Extra Hamlib config (optional)</label>
-          <input
-            type="text"
-            id="rig_extra_conf"
-            name="rig_extra_conf"
-            placeholder="e.g. stop_bits=1"
-            value="{{ rig_extra_conf }}"
-          />
-          <div class="cfg-actions">
-            <input name="save_cat" type="submit" value="Save CAT Settings" />
-          </div>
-        </form>
-        <p>CAT Status: <strong>{{ cat_status }}</strong></p>
-        <p>CAT polls rigctld for frequency and auto‑recalls stored bands.</p>
-      </div>
-
-      <div class="cfg-block">
-        <h3>Save Profile</h3>
-        <form id="input_file" action="/load" method="post" enctype="multipart/form-data">
-          <label>Enter filename:</label>
-          <input name="file_name" type="text" />
-          <div class="cfg-actions">
-            <input name="save" type="submit" value="Save"/>
-          </div>
-        </form>
-      </div>
-    </div>
-
-    <div class="cfg-actions" style="justify-content:center;">
-      <button name="exit" class="button" id="exit" type="button">Return</button>
-    </div>
-
+    </main>
   </div>
 </div>
 
 <script>
-/* ===== Existing behavior, but less fragile ===== */
-
-// table population
-const sessionEncStatus = "{{ enc }}";
-console.log(sessionEncStatus);
-
-const sessionEnc  = ["{{ enc_val[0]}}", "{{ enc_val[1] }}"];
+const sessionEnc = ["{{ enc_val[0] }}", "{{ enc_val[1] }}"];
 const sessionTune = ["{{ tune[0] }}", "{{ tune[1] }}", "{{ tune[2] }}"];
-const sessionInd  = ["{{ ind[0] }}", "{{ ind[1] }}", "{{ ind[2] }}"];
+const sessionInd = ["{{ ind[0] }}", "{{ ind[1] }}", "{{ ind[2] }}"];
 const sessionLoad = ["{{ load[0] }}", "{{ load[1] }}", "{{ load[2] }}"];
 
-const rowSets = [
-  { cls: "pinA",  vals: [sessionEnc[0], sessionTune[0], sessionInd[0], sessionLoad[0]] },
-  { cls: "pinB",  vals: [sessionEnc[1], sessionTune[1], sessionInd[1], sessionLoad[1]] },
-  { cls: "ratio", vals: ["", sessionTune[2] ?? 1, sessionInd[2] ?? 1, sessionLoad[2] ?? 1] },
-];
-
-rowSets.forEach(set => {
-  const cells = document.querySelectorAll("." + set.cls);
-  cells.forEach((cell, idx) => cell.textContent = set.vals[idx] ?? "");
+[
+  ["summary-enc-a", sessionEnc[0]],
+  ["summary-enc-b", sessionEnc[1]],
+  ["card-enc-a", sessionEnc[0]],
+  ["card-enc-b", sessionEnc[1]],
+  ["card-tune-a", sessionTune[0]],
+  ["card-tune-b", sessionTune[1]],
+  ["card-tune-ratio", sessionTune[2]],
+  ["card-ind-a", sessionInd[0]],
+  ["card-ind-b", sessionInd[1]],
+  ["card-ind-ratio", sessionInd[2]],
+  ["card-load-a", sessionLoad[0]],
+  ["card-load-b", sessionLoad[1]],
+  ["card-load-ratio", sessionLoad[2]],
+].forEach(([id, value]) => {
+  const el = document.getElementById(id);
+  if (el) {
+    el.textContent = value && value !== "None" ? value : "Not Set";
+  }
 });
 
-// range buttons -> POST /config (same as before)
 document.querySelectorAll(".set_range").forEach(btn => {
   btn.addEventListener("click", () => {
     const formData = new FormData();
@@ -452,53 +1032,79 @@ document.querySelectorAll(".set_range").forEach(btn => {
   });
 });
 
-// hover polish for .button class
 document.querySelectorAll(".button").forEach(button => {
   button.addEventListener("mouseover", () => button.classList.add("mouseover"));
-  button.addEventListener("mouseout",  () => button.classList.remove("mouseover"));
+  button.addEventListener("mouseout", () => button.classList.remove("mouseover"));
 });
 
-// return
-const exitBtn = document.getElementById("exit");
-if (exitBtn) exitBtn.addEventListener("click", () => {
+function handleReturn() {
   window.location.href = "/";
-});
-if (exitBtn) exitBtn.addEventListener("touchend", event => {
-  event.preventDefault();
-  window.location.href = "/";
+}
+
+["exit", "exit_footer"].forEach(id => {
+  const btn = document.getElementById(id);
+  if (!btn) return;
+  btn.addEventListener("click", handleReturn);
+  btn.addEventListener("touchend", event => {
+    event.preventDefault();
+    handleReturn();
+  });
 });
 
-// disable Add Tune/Ind/Load until PinA/PinB/ratio are selected (client-only)
 function updateStepperButtons() {
-  const pinA = document.getElementById("PinA")?.value || "";
-  const pinB = document.getElementById("PinB")?.value || "";
-  const ratio = document.getElementById("ratio")?.value || "";
+  const pinA = document.getElementById("stepper_pin_a")?.value || "";
+  const pinB = document.getElementById("stepper_pin_b")?.value || "";
+  const ratio = document.getElementById("stepper_ratio")?.value || "";
   const ok = !!(pinA && pinB && ratio);
 
   ["add_tune", "add_ind", "add_load"].forEach(id => {
-    const b = document.getElementById(id);
-    if (b) b.disabled = !ok;
+    const button = document.getElementById(id);
+    if (button) button.disabled = !ok;
   });
-
-  const addEnc = document.getElementById("add_enc_btn");
-  if (addEnc) addEnc.disabled = !(pinA && pinB);
 }
-["PinA","PinB","ratio"].forEach(id => {
+
+["stepper_pin_a", "stepper_pin_b", "stepper_ratio"].forEach(id => {
   const el = document.getElementById(id);
   if (el) el.addEventListener("change", updateStepperButtons);
 });
 updateStepperButtons();
 
-// status bar updates from main window (fix origin check)
+function updateEncoderButton() {
+  const pinA = document.getElementById("enc_pin_a")?.value || "";
+  const pinB = document.getElementById("enc_pin_b")?.value || "";
+  const button = document.getElementById("add_enc_btn");
+  if (button) button.disabled = !(pinA && pinB);
+}
+
+["enc_pin_a", "enc_pin_b"].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener("change", updateEncoderButton);
+});
+updateEncoderButton();
+
+function syncFollowModeChecks(source) {
+  const tci = document.getElementById("follow_me");
+  const cat = document.getElementById("cat_enabled");
+  if (!tci || !cat) return;
+  if (source === "tci" && tci.checked) {
+    cat.checked = false;
+  }
+  if (source === "cat" && cat.checked) {
+    tci.checked = false;
+  }
+}
+
+document.getElementById("follow_me")?.addEventListener("change", () => syncFollowModeChecks("tci"));
+document.getElementById("cat_enabled")?.addEventListener("change", () => syncFollowModeChecks("cat"));
+
 const statusBar = document.getElementById("status_bar");
 window.addEventListener("message", event => {
   if (!statusBar) return;
-  const allowedOrigin = window.location.origin;
-  if (event.origin !== allowedOrigin) {
-    statusBar.textContent = "Security Breach!";
-  } else {
-    statusBar.textContent = `Status Bar: ${event.data}`;
+  if (event.origin !== window.location.origin) {
+    statusBar.textContent = "Security warning: blocked cross-origin status update.";
+    return;
   }
+  statusBar.textContent = `Latest result: ${event.data}`;
 });
 </script>
 </body>

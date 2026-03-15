@@ -64,14 +64,23 @@ If startup fails with `Address already in use`, another `amplifier` process is a
 - TCI and CAT band detection use the latest requested band, even if a new request arrives while Tune/Ind/Load are still moving
 - If a band change arrives during motion, it is queued and applied automatically when the motors become idle
 - The live system wiring maps the 40m and 80m band outputs in reverse order relative to the last two software slots, and the runtime mapping compensates for that
-- TCI Follow Me now has an idle watchdog: while TCI follow is enabled and CAT is not active, the app expects valid TCI frequency frames at least every 15 seconds and forces a reconnect if the websocket goes stale while still marked connected
-- CAT auto-band now has a matching watchdog: while CAT is enabled, the app expects valid frequency polls at least every 15 seconds and marks CAT stale if polling stops yielding usable frequency data
+- TCI Follow Me now has a configurable idle watchdog: while TCI follow is enabled and CAT is not active, the app expects valid TCI frequency frames within the configured watchdog window and forces a reconnect if the websocket goes stale while still marked connected
+- CAT auto-band now has a matching configurable watchdog: while CAT is enabled, the app expects valid frequency polls within the configured watchdog window and marks CAT stale if polling stops yielding usable frequency data
+- The config page exposes explicit `Start` and `Stop` actions for both TCI and CAT
+- Only one follow service can be active at a time: starting or enabling CAT disables TCI, and starting or enabling TCI disables CAT
 
 ### Stepper and status behavior
 
 - Stepper `max` values are normalized during profile load/save so the active position and stored band memories cannot exceed the runtime travel limit used by the encoder loop
 - This prevents Tune/Ind/Load selection from appearing dead after loading a profile with stale `pos > max` data
 - I2C hardware faults are logged and can still surface as warnings, but they no longer overwrite unrelated operator status messages such as save/store confirmations unless the status bar is already showing an I2C warning
+
+### Config page behavior
+
+- The config page now groups controls into `Hardware Setup`, `Stepper Calibration and Features`, `Profiles`, and `Radio Follow`
+- The old assignment table is replaced with separate Encoder, Tune, Inductor, and Load cards so each axis can be reviewed and calibrated independently
+- The Radio Follow section now exposes watchdog timer values and explicit start/stop actions for both TCI and CAT
+- The config layout includes an LCD-specific compact breakpoint so the Pi touchscreen view uses tighter spacing than the desktop browser view
 
 ### LCD and touchscreen setup
 
@@ -90,6 +99,7 @@ If startup fails with `Address already in use`, another `amplifier` process is a
 - Refuses to reinstall over a dirty git worktree unless `--force` is passed
 - Installs services for `INSTALL_USER`, defaulting to `${SUDO_USER}` when present or `pi` otherwise
 - Installs the release binary to `/usr/local/bin/amplifier`
+- Provisions the currently checked-out application binary, including the latest compiled Askama templates such as the config page
 - Ensures that install user's `labwc` config contains the Goodix touchscreen-to-`DSI-1` mapping needed for touch input on the LCD
 - Verifies that `amplifier.service` reaches `active` state and that the HTTP port is actually listening
 
