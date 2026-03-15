@@ -1,7 +1,7 @@
 <!doctype html>
 <html>
     <head>
-        <link rel="stylesheet" href="/static/amplifier.css?v=20260201l" />
+        <link rel="stylesheet" href="/static/amplifier.css?v=20260314a" />
         <link rel="stylesheet" href="/static/skin.css?v=20260201" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
     </head>
@@ -16,7 +16,7 @@
       </div>
       <div class="amp-header-right">
         <div class="amp-pill"><span class="amp-ico">📡</span><span id="header_callsign"></span></div>
-        <div class="amp-pill"><span class="amp-ico">🛰️</span><span id="header_tci">TCI: DISCONNECTED</span></div>
+        <div class="amp-pill" id="header_tci_pill"><span class="amp-ico">🛰️</span><span id="header_tci">TCI: DISCONNECTED</span></div>
         <div class="amp-pill"><span class="amp-ico">🎛️</span><span id="header_cat">CAT: DISCONNECTED</span></div>
         <button class="meter-toggle" id="meter_toggle" type="button" aria-label="Toggle meter view">📟</button>
         <button class="theme-toggle" id="theme_toggle" type="button" aria-label="Toggle theme">🌙</button>
@@ -195,10 +195,10 @@
                     </div>
                 </td>
             </tr>
-            <tr id="band_selectors" style="height: 5rem"></tr>
+            <tr id="band_selectors" style="height: 3.2rem"></tr>
             <!-- horizontal bars removed for Tune/Ind/Load -->
         </table>
-        <table id="power_btns" style="width: 64.7rem">
+        <table id="power_btns">
             <tr>
                 <th>Blower</th>
                 <th>Filament</th>
@@ -209,7 +209,6 @@
 
         <p id="status_bar"></p>
 
-        <br />
         <div class="footer-actions">
             <button
                 id="store_btn"
@@ -218,10 +217,10 @@
                 type="submit"
                 value="Store"
             >
-                Store
+                Store To Band
             </button>
             <button id="save_btn" class="button" name="save" value="Save">
-                Save/Stop
+                Save Profile
             </button>
             <button
                 class="button"

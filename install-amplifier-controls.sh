@@ -16,6 +16,64 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
 }
 
+ensure_labwc_touch_entry() {
+  local file="$1"
+  local entry="$2"
+  local tmp
+
+  grep -Fqx "$entry" "$file" && return 0
+
+  tmp="$(mktemp)"
+  awk -v entry="$entry" '
+    /<\/openbox_config>/ && !inserted {
+      print entry
+      inserted=1
+    }
+    { print }
+    END {
+      if (!inserted) {
+        print entry
+      }
+    }
+  ' "$file" >"$tmp"
+  mv "$tmp" "$file"
+}
+
+install_labwc_touch_mappings() {
+  local user_rc="${HOME}/.config/labwc/rc.xml"
+  local system_rc="/etc/xdg/labwc/rc.xml"
+  local entries=(
+    '  <touch deviceName="10-0014 Goodix Capacitive TouchScreen" mapToOutput="DSI-1" mouseEmulation="yes" />'
+    '  <touch deviceName="11-0014 Goodix Capacitive TouchScreen" mapToOutput="DSI-2" mouseEmulation="yes" />'
+    '  <touch deviceName="6-0014 Goodix Capacitive TouchScreen" mapToOutput="DSI-1" mouseEmulation="yes" />'
+    '  <touch deviceName="4-0014 Goodix Capacitive TouchScreen" mapToOutput="DSI-2" mouseEmulation="yes" />'
+  )
+
+  mkdir -p "$(dirname "${user_rc}")"
+  if [[ ! -f "${user_rc}" ]]; then
+    if [[ -f "${system_rc}" ]]; then
+      cp "${system_rc}" "${user_rc}"
+    else
+      cat >"${user_rc}" <<'EOF'
+<openbox_config>
+</openbox_config>
+EOF
+    fi
+  fi
+
+  for entry in "${entries[@]}"; do
+    ensure_labwc_touch_entry "${user_rc}" "${entry}"
+  done
+
+  if command -v labwc >/dev/null 2>&1; then
+    local labwc_pid
+    labwc_pid="$(pgrep -u pi -x labwc | head -n1 || true)"
+    if [[ -n "${labwc_pid}" ]]; then
+      sudo -u pi env LABWC_PID="${labwc_pid}" labwc --reconfigure || true
+    fi
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --force) FORCE=1; shift ;;
@@ -51,6 +109,10 @@ cd "${REPO_ROOT}"
 
 log "Ensuring helper scripts are executable..."
 chmod +x scripts/*.sh
+
+log "Installing labwc touchscreen mappings for the Goodix DSI panel..."
+install_labwc_touch_mappings
+log "labwc touch mappings OK: ${HOME}/.config/labwc/rc.xml"
 
 log "Installing Hamlib..."
 "${REPO_ROOT}/scripts/install-hamlib.sh"

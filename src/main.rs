@@ -202,6 +202,7 @@ struct AppState {
     tci_server: String,
     follow_me: bool,
     last_tci_band: Option<Bands>,
+    pending_tci_band: Option<Bands>,
     tci_status: String,
     cat_enabled: bool,
     cat_status: String,
@@ -213,6 +214,7 @@ struct AppState {
     rig_civaddr: String,
     rig_extra_conf: String,
     last_cat_band: Option<Bands>,
+    pending_cat_band: Option<Bands>,
     default_profile: String,
     meter_sender: Option<mpsc::Sender<bool>>,
 }
@@ -318,6 +320,7 @@ async fn main() -> Result<(), std::io::Error> {
         tci_server: String::new(),
         follow_me: false,
         last_tci_band: None,
+        pending_tci_band: None,
         tci_status: "DISCONNECTED".to_string(),
         cat_enabled: false,
         cat_status: "DISCONNECTED".to_string(),
@@ -329,6 +332,7 @@ async fn main() -> Result<(), std::io::Error> {
         rig_civaddr: String::new(),
         rig_extra_conf: String::new(),
         last_cat_band: None,
+        pending_cat_band: None,
         default_profile: String::new(),
         meter_sender: None,
     }));
@@ -747,6 +751,24 @@ fn band_to_key(band: &Bands) -> &'static str {
     }
 }
 
+fn try_recall_pending_band(
+    state: Arc<Mutex<AppState>>,
+    source: &str,
+    pending_band: Option<Bands>,
+) -> Option<(Bands, &'static str)> {
+    let band = pending_band?;
+    let mut state_lck = state.lock().unwrap();
+    let tune_busy = *state_lck.tune.lock().unwrap().operate.lock().unwrap();
+    let ind_busy = *state_lck.ind.lock().unwrap().operate.lock().unwrap();
+    let load_busy = *state_lck.load.lock().unwrap().operate.lock().unwrap();
+    if tune_busy || ind_busy || load_busy || state_lck.band == band {
+        return None;
+    }
+    let band_key = band_to_key(&band);
+    state_lck.status = format!("{}: applying queued {}", source, band_key);
+    Some((band, band_key))
+}
+
 async fn tci_follow_task(state: Arc<Mutex<AppState>>) {
     loop {
         let (server, enabled, cat_enabled) = {
@@ -787,6 +809,26 @@ async fn tci_follow_task(state: Arc<Mutex<AppState>>) {
                 }
                 println!("TCI: connected to {}", server);
                 loop {
+                    let pending_tci = {
+                        let state_lck = state.lock().unwrap();
+                        state_lck.pending_tci_band.clone()
+                    };
+                    if let Some((band_enum, band_key)) =
+                        try_recall_pending_band(state.clone(), "Follow Me", pending_tci)
+                    {
+                        {
+                            let mut state_lck = state.lock().unwrap();
+                            state_lck.pending_tci_band = None;
+                            state_lck.last_tci_band = Some(band_enum.clone());
+                        }
+                        match recall_handler(state.clone(), band_key.to_string(), band_enum, true) {
+                            Ok(_) => println!("TCI: recall queued {}", band_key),
+                            Err(e) => {
+                                let mut state_lck = state.lock().unwrap();
+                                state_lck.status = format!("TCI recall {} failed: {}", band_key, e);
+                            }
+                        }
+                    }
                     tokio::select! {
                         msg = futures_util::StreamExt::next(&mut ws) => {
                             match msg {
@@ -807,20 +849,28 @@ async fn tci_follow_task(state: Arc<Mutex<AppState>>) {
                                                     let mut state_lck = state.lock().unwrap();
                                                     if !state_lck.follow_me
                                                         || state_lck.tci_server != server
-                                                        || state_lck.last_tci_band == Some(band.clone())
                                                     {
                                                         None
                                                     } else {
-                                                        state_lck.last_tci_band = Some(band.clone());
                                                         let tune_busy = *state_lck.tune.lock().unwrap().operate.lock().unwrap();
                                                         let ind_busy = *state_lck.ind.lock().unwrap().operate.lock().unwrap();
                                                         let load_busy = *state_lck.load.lock().unwrap().operate.lock().unwrap();
                                                         if tune_busy || ind_busy || load_busy {
-                                                            state_lck.status = "Follow Me: tune in progress, skipping".to_string();
+                                                            state_lck.pending_tci_band = Some(band.clone());
+                                                            state_lck.status = format!(
+                                                                "Follow Me: queued {} until tune completes",
+                                                                band_to_key(&band)
+                                                            );
                                                             None
-                                                        } else if state_lck.band == band {
+                                                        } else if state_lck.band == band
+                                                            || state_lck.last_tci_band == Some(band.clone())
+                                                        {
+                                                            state_lck.pending_tci_band = None;
+                                                            state_lck.last_tci_band = Some(band.clone());
                                                             None
                                                         } else {
+                                                            state_lck.pending_tci_band = None;
+                                                            state_lck.last_tci_band = Some(band.clone());
                                                             Some((band.clone(), band_to_key(&band)))
                                                         }
                                                     }
@@ -867,6 +917,24 @@ async fn tci_follow_task(state: Arc<Mutex<AppState>>) {
 async fn cat_follow_task(state: Arc<Mutex<AppState>>) {
     let mut cat_connected = false;
     loop {
+        let pending_cat = {
+            let state_lck = state.lock().unwrap();
+            state_lck.pending_cat_band.clone()
+        };
+        if let Some((band_enum, band_key)) =
+            try_recall_pending_band(state.clone(), "CAT", pending_cat)
+        {
+            {
+                let mut state_lck = state.lock().unwrap();
+                state_lck.pending_cat_band = None;
+                state_lck.last_cat_band = Some(band_enum.clone());
+            }
+            if let Err(e) = recall_handler(state.clone(), band_key.to_string(), band_enum, true) {
+                let mut state_lck = state.lock().unwrap();
+                state_lck.status = format!("CAT recall {} failed: {}", band_key, e);
+            }
+        }
+
         let (enabled, model_id, device, baud, civaddr, extra_conf) = {
             let state_lck = state.lock().unwrap();
             (
@@ -939,20 +1007,28 @@ async fn cat_follow_task(state: Arc<Mutex<AppState>>) {
                                 state_lck.cat_status = "CONNECTED".to_string();
                             }
                             if !state_lck.cat_enabled
-                                || state_lck.last_cat_band == Some(band.clone())
                             {
                                 None
                             } else {
-                                state_lck.last_cat_band = Some(band.clone());
                                 let tune_busy = *state_lck.tune.lock().unwrap().operate.lock().unwrap();
                                 let ind_busy = *state_lck.ind.lock().unwrap().operate.lock().unwrap();
                                 let load_busy = *state_lck.load.lock().unwrap().operate.lock().unwrap();
                                 if tune_busy || ind_busy || load_busy {
-                                    state_lck.status = "CAT: tune in progress, skipping".to_string();
+                                    state_lck.pending_cat_band = Some(band.clone());
+                                    state_lck.status = format!(
+                                        "CAT: queued {} until tune completes",
+                                        band_to_key(&band)
+                                    );
                                     None
-                                } else if state_lck.band == band {
+                                } else if state_lck.band == band
+                                    || state_lck.last_cat_band == Some(band.clone())
+                                {
+                                    state_lck.pending_cat_band = None;
+                                    state_lck.last_cat_band = Some(band.clone());
                                     None
                                 } else {
+                                    state_lck.pending_cat_band = None;
+                                    state_lck.last_cat_band = Some(band.clone());
                                     Some((band.clone(), band_to_key(&band)))
                                 }
                             }
@@ -1330,39 +1406,36 @@ async fn aquire_data(state: Arc<Mutex<AppState>>) {
 //aquires I2C data and loads it to the AppState global Mutex.
 async fn aquire_i2c_data(state: Arc<Mutex<AppState>>) {
     let mut interval = interval(Duration::from_millis(100));
-    let mut temp_data: HashMap<String, [String;2]> = HashMap::new();
     let (tx, rx) = mpsc::channel();
     state.lock().unwrap().meter_sender = Some(tx);
     let mut run = true;
     loop {
         interval.tick().await;
         let mut val = state.lock().unwrap().pwr_btns.clone();
-        let btn_arr = [val.Blwr[0], val.Fil[0], val.Fil[1], val.HV[0], val.HV[1]];
-        btn_arr.iter().enumerate().for_each(|btn|{
-            if let Ok(val) = val.mcp.read_pin(*btn.1) {
-                match btn.0 {
-                    0 => {
-                        temp_data.insert("Blwr".to_string(), [
-                        if val == mcp230xx::Level::High {"ON".to_string()} else {"OFF".to_string()},
-                        "OFF".to_string()]);
-                    },
-                    1 | 2 => {
-                        temp_data.insert("Fil".to_string(), [
-                        if val == mcp230xx::Level::High {"ON".to_string()} else {"OFF".to_string()},
-                        if val == mcp230xx::Level::High {"ON".to_string()} else {"OFF".to_string()}]);
-                    }
-                    3 | 4 => {
-                        temp_data.insert("HV".to_string(), [
-                        if val == mcp230xx::Level::High {"ON".to_string()} else {"OFF".to_string()},
-                        if val == mcp230xx::Level::High {"ON".to_string()} else {"OFF".to_string()}]);
-                    
-                    }
-                    _ => println!("Match statement error with MCP Pins")
+        let mut temp_data: HashMap<String, [String; 2]> = HashMap::from([
+            ("Blwr".to_string(), ["OFF".to_string(), "OFF".to_string()]),
+            ("Fil".to_string(), ["OFF".to_string(), "OFF".to_string()]),
+            ("HV".to_string(), ["OFF".to_string(), "OFF".to_string()]),
+            ("Oper".to_string(), ["OFF".to_string(), "OFF".to_string()]),
+        ]);
 
-                }
-                    
-            } 
-        });
+        let mut read_level = |pin| {
+            val.mcp
+                .read_pin(pin)
+                .map(|level| if level == mcp230xx::Level::High { "ON".to_string() } else { "OFF".to_string() })
+                .unwrap_or_else(|_| "OFF".to_string())
+        };
+
+        temp_data.insert("Blwr".to_string(), [read_level(val.Blwr[0]), "OFF".to_string()]);
+        temp_data.insert(
+            "Fil".to_string(),
+            [read_level(val.Fil[0]), read_level(val.Fil[1])],
+        );
+        temp_data.insert(
+            "HV".to_string(),
+            [read_level(val.HV[0]), read_level(val.HV[1])],
+        );
+        temp_data.insert("Oper".to_string(), [read_level(val.Oper[0]), "OFF".to_string()]);
         if let Ok(val) = rx.try_recv() {
             run = val;
         }
@@ -1469,8 +1542,9 @@ fn recall_handler (state: Arc<Mutex<AppState>>, band: String, band_enum: Bands, 
             Bands::M10 => {let _ = state_lck.pwr_btns.clone().mcp.set_pin(state_lck.pwr_btns.clone().bands[0], mcp230xx::Level::High);},
             Bands::M11 => {let _ = state_lck.pwr_btns.clone().mcp.set_pin(state_lck.pwr_btns.clone().bands[1], mcp230xx::Level::High);},
             Bands::M20 => {let _ = state_lck.pwr_btns.clone().mcp.set_pin(state_lck.pwr_btns.clone().bands[2], mcp230xx::Level::High);},
-            Bands::M40 => {let _ = state_lck.pwr_btns.clone().mcp.set_pin(state_lck.pwr_btns.clone().bands[3], mcp230xx::Level::High);},
-            Bands::M80 => {let _ = state_lck.pwr_btns.clone().mcp.set_pin(state_lck.pwr_btns.clone().bands[4], mcp230xx::Level::High);},
+            // Hardware wiring maps the last two band outputs in reverse order.
+            Bands::M40 => {let _ = state_lck.pwr_btns.clone().mcp.set_pin(state_lck.pwr_btns.clone().bands[4], mcp230xx::Level::High);},
+            Bands::M80 => {let _ = state_lck.pwr_btns.clone().mcp.set_pin(state_lck.pwr_btns.clone().bands[3], mcp230xx::Level::High);},
             Bands::M15 => {}
         }
         state_lck.band = band_enum;

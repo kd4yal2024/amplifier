@@ -49,6 +49,30 @@ If startup fails with `Address already in use`, another `amplifier` process is a
 - The app now reports bind failures cleanly instead of panicking on `TcpListener::bind`
 - TCI and CAT background tasks are spawned during startup; a port conflict can still occur after those tasks begin
 
+### Power controls
+
+- `Blwr` is a direct single-stage output
+- `Oper` is a direct single-stage output: `ON` means Operate, `OFF` means Standby
+- `Fil` is a two-stage sequence:
+  `ON` first energizes stage 1, then energizes stage 2 after the frontend's 3-second delay
+  `OFF` drops the staged outputs back down
+- `HV` follows the same two-stage pattern as `Fil`
+- The live power-state feedback path reports `Fil` and `HV` as two separate stages so the UI can distinguish "step start" from fully on
+
+### Band follow behavior
+
+- TCI and CAT band detection use the latest requested band, even if a new request arrives while Tune/Ind/Load are still moving
+- If a band change arrives during motion, it is queued and applied automatically when the motors become idle
+- The live system wiring maps the 40m and 80m band outputs in reverse order relative to the last two software slots, and the runtime mapping compensates for that
+
+### LCD and touchscreen setup
+
+- The production UI is expected to run on the Raspberry Pi DSI panel as output `DSI-1`
+- The touchscreen controller currently appears as `10-0014 Goodix Capacitive TouchScreen` on this hardware
+- `labwc` must map that Goodix device to `DSI-1`, otherwise touch can appear dead or land on the wrong screen coordinates while a mouse still works
+- The main installer now ensures these `Goodix ... 0014` touch mappings exist in `~/.config/labwc/rc.xml` and tries to reload `labwc`
+- If touch stops working after a desktop reset, verify the device name with `libinput list-devices` and confirm the matching `<touch ... mapToOutput="DSI-1" />` entry exists in `~/.config/labwc/rc.xml`
+
 ## Installer scripts
 
 ### `install-amplifier-controls.sh`
@@ -57,6 +81,7 @@ If startup fails with `Address already in use`, another `amplifier` process is a
 - Preserves an existing checkout branch instead of forcibly switching it
 - Refuses to reinstall over a dirty git worktree unless `--force` is passed
 - Installs the release binary to `/usr/local/bin/amplifier`
+- Ensures `labwc` contains the Goodix touchscreen-to-`DSI-1` mapping needed for touch input on the LCD
 - Verifies that `amplifier.service` reaches `active` state and that the HTTP port is actually listening
 
 The old path `scripts/install-amplifier-controls.sh` now delegates to the root installer for backward compatibility.
@@ -87,6 +112,7 @@ The old path `scripts/install-amplifier-controls.sh` now delegates to the root i
 These commands were used as the production-readiness baseline:
 
 ```bash
+bash -n install-amplifier-controls.sh
 bash -n scripts/install-tci-follow-service.sh
 cargo build
 cargo test --quiet
@@ -108,6 +134,28 @@ Stop the stale dev process or run on another port:
 ```bash
 pkill -f 'target/debug/amplifier'
 AMPLIFIER_BIND=0.0.0.0:3001 cargo run
+```
+
+### Touchscreen not activating buttons
+
+First confirm the active touch device name:
+
+```bash
+libinput list-devices
+```
+
+The expected live device on the DSI panel is currently `10-0014 Goodix Capacitive TouchScreen`.
+
+Then check the `labwc` mapping:
+
+```bash
+grep -n "Goodix Capacitive TouchScreen" ~/.config/labwc/rc.xml
+```
+
+If the `0014` entries are missing, rerun the installer or add the `mapToOutput="DSI-1"` entry and reload `labwc`:
+
+```bash
+LABWC_PID="$(pgrep -u pi -x labwc | head -n1)" labwc --reconfigure
 ```
 
 ### Reinstall safety check

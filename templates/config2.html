@@ -93,6 +93,17 @@
       box-shadow: none;
     }
 
+    .button,
+    input[type="submit"],
+    button,
+    select,
+    .switch,
+    .slider,
+    label {
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+    }
+
     .cfg-status {
       margin-top: 14px;
       padding: 10px 12px;
@@ -449,7 +460,13 @@ document.querySelectorAll(".button").forEach(button => {
 
 // return
 const exitBtn = document.getElementById("exit");
-if (exitBtn) exitBtn.addEventListener("click", () => window.close());
+if (exitBtn) exitBtn.addEventListener("click", () => {
+  window.location.href = "/";
+});
+if (exitBtn) exitBtn.addEventListener("touchend", event => {
+  event.preventDefault();
+  window.location.href = "/";
+});
 
 // disable Add Tune/Ind/Load until PinA/PinB/ratio are selected (client-only)
 function updateStepperButtons() {

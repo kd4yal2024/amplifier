@@ -2,6 +2,27 @@
 
 ## 2026-03-14
 
+### Unreleased local changes - Restore Tony-style power sequencing and band-follow behavior
+
+### Runtime behavior
+
+- Restored the intended Tony-style power-button behavior:
+  `Blwr` and `Oper` remain single-stage outputs, while `Fil` and `HV` are treated as two-stage sequences
+- Fixed live power-state reporting so `Fil` and `HV` expose both stages separately and `Oper` is tracked again in the UI state path
+- Fixed the 40m/80m band-output mapping for the live hardware wiring
+- Changed TCI and CAT follow logic so a band change received while Tune/Ind/Load are moving is queued and applied after motion finishes instead of being dropped
+- Added the live Goodix `0014` touchscreen mapping to the `labwc` setup path so the DSI LCD receives touch input correctly
+
+### Documentation
+
+- Documented the restored power-control behavior and queued band-follow behavior in the README
+- Documented the DSI LCD / Goodix touchscreen setup, touch-mapping troubleshooting steps, and installer behavior in the README
+
+### Install and desktop setup
+
+- Updated `install-amplifier-controls.sh` to ensure `~/.config/labwc/rc.xml` contains the Goodix `0014` touch mappings for `DSI-1` / `DSI-2`
+- Added a best-effort `labwc --reconfigure` step during install so touchscreen mapping changes apply without waiting for a reboot
+
 ### Commit `8a39414` - Move installer entrypoints to repo root
 
 - Added root-level `install-amplifier-controls.sh` as the primary installer entrypoint for the current checkout

@@ -31,6 +31,7 @@ if (headerCall) {
     call_sign.style.display = "none";  // keep table layout stable
 }
 
+const headerTciPill = document.getElementById("header_tci_pill");
 const headerTci = document.getElementById("header_tci");
 const headerCat = document.getElementById("header_cat");
 const themeToggle = document.getElementById("theme_toggle");
@@ -77,6 +78,14 @@ function buildAnalogTicks() {
         }
         svg.appendChild(g);
     });
+}
+
+function bindTouchClick(button) {
+    if (!button) return;
+    button.addEventListener("touchend", (event) => {
+        event.preventDefault();
+        button.click();
+    }, { passive: false });
 }
 
 function applyTheme(theme) {
@@ -143,17 +152,26 @@ let meter_values = {};
 let meter_color = "";
 let old_data = "";
 let storeMode = false;
+
+function setUiStatus(message) {
+    if (statusBarContents) {
+        statusBarContents.innerText = message;
+    }
+}
 // tune, ind, load button configuration.
 const storeBtn = document.getElementById("store_btn");
 storeBtn.addEventListener("click", (event) => {
     storeMode = storeMode == false ? true : false;
     if (storeMode == true) {
         storeBtn.classList.add("hover_not_disabled");
+        storeBtn.innerText = "Tap Band To Store";
+        setUiStatus("Store armed: tap a band button to save Tune, Inductor, and Load for that band.");
     } else {
         removeStore();
     }
     console.log(bandSelectors.childNodes);
 });
+bindTouchClick(storeBtn);
 
 const tuneBtn = document.getElementById("tune_button");
 const indBtn = document.getElementById("ind_button");
@@ -176,12 +194,14 @@ bands.forEach((band, i) => {
             fetch(`/store/${band}`, {
                 method: "POST",
             });
+            setUiStatus(`Stored current Tune, Inductor, and Load settings to ${band.slice(1, 3) + band.slice(0, 1)}. Tap Save Profile to write the file.`);
         } else {
             fetch(`/recall/${band}`, {
                 method: "POST",
             });
         }
     });
+    bindTouchClick(btn);
     btnBox.appendChild(btn);
     bandSelectors.appendChild(btnBox);
 });
@@ -255,16 +275,11 @@ function pwrBtnAction(event) {
     }
 }
 
-let configWindow;
 statusBar.appendChild(statusBarContents);
-configBtn.addEventListener("click", (event) => {
-    console.log(event);
-    configWindow = window.open(
-        "/config",
-        "Config-Page",
-        "width=600, height=600",
-    );
+configBtn.addEventListener("click", () => {
+    window.location.href = "/config";
 });
+bindTouchClick(configBtn);
 saveBtn.addEventListener("click", (event) => {
     formData = new FormData();
     console.log(event.target.name);
@@ -273,7 +288,9 @@ saveBtn.addEventListener("click", (event) => {
         method: "POST",
         body: formData,
     });
+    setUiStatus("Saving current profile to disk.");
 });
+bindTouchClick(saveBtn);
 const formVals = ["tune", "ind", "load"];
 let lastSelectorPosition = "";
 let lastBandSelected = "";
@@ -301,6 +318,7 @@ let lastBandSelected = "";
             body: formData,
         });
     });
+    bindTouchClick(btn);
 });
 
 myButtons.forEach((button) => {
@@ -334,18 +352,15 @@ learn_update.onmessage = (e) => {
         learn_update.close();
     } else {
         meter_values = JSON.parse(e.data);
-        if (configWindow != null) {
-            configWindow.postMessage(
-                meter_values.status,
-                window.location.origin,
-            );
-        }
         temperature_data.innerText = "Temp:" +  Math.round(meter_values.temperature) + " C";
         clock_data.innerText = meter_values.time;
         call_sign_data.innerText = meter_values.call_sign;
         if (headerTci) {
             const tci = (meter_values.tci_status || "DISCONNECTED").toUpperCase();
             headerTci.textContent = `TCI: ${tci}`;
+            if (headerTciPill) {
+                headerTciPill.classList.toggle("is-connected", tci === "CONNECTED");
+            }
         }
         if (headerCat) {
             const cat = (meter_values.cat_status || "DISCONNECTED").toUpperCase();
@@ -460,6 +475,7 @@ window.addEventListener("message", (e) => {
 function removeStore() {
     storeBtn.classList.remove("hover_not_disabled");
     storeMode = false;
+    storeBtn.innerText = "Store To Band";
 }
 function float2Int(val) {
     return val | 0;
