@@ -13,6 +13,8 @@
 - Changed TCI and CAT follow logic so a band change received while Tune/Ind/Load are moving is queued and applied after motion finishes instead of being dropped
 - Added the live Goodix `0014` touchscreen mapping to the `labwc` setup path so the DSI LCD receives touch input correctly
 - Prevented queued TCI/CAT band changes from firing after the operator disables Follow Me or CAT
+- Replaced multipart form parsing panics with explicit error handling in the config, selector, load, and power-control paths
+- Added operator-visible I2C fault reporting and recovery logging for power-button pin reads and meter reads
 
 ### Documentation
 
