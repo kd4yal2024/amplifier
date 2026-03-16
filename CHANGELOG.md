@@ -23,6 +23,9 @@
 - Enforced single-service follow behavior so enabling or starting CAT turns TCI off, and enabling or starting TCI turns CAT off
 - Reworked the config page into grouped sections for hardware setup, calibration, profiles, and radio follow, replacing the old assignment table with separate axis cards
 - Added LCD-specific config-page spacing and viewport containment so the touchscreen layout uses a tighter presentation than the desktop browser view
+- Fixed config-page persistence for callsign and TCI/CAT settings so those changes are written back to the active profile immediately
+- Fixed startup default-profile state so the saved default is shown correctly again after service restart
+- Rewired the config page `Latest Status` box to the live `/sse` feed instead of relying on cross-window messages
 
 ### Documentation
 
@@ -31,6 +34,7 @@
 - Documented the stepper max normalization and I2C status-message behavior in the README
 - Documented the new TCI/CAT follow watchdog behavior in the README
 - Documented the new config-page workflow, explicit follow-service controls, and installer provisioning expectations in the README
+- Documented the config-page persistence fixes and direct SSE-backed status updates in the README
 
 ### Install and desktop setup
 

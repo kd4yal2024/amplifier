@@ -57,6 +57,7 @@ struct ConfigTemplate {
     load: Vec<String>,
     pins: Vec<u8>,
     files: Vec<String>,
+    call_sign: String,
     tci_server: String,
     follow_me: bool,
     tci_status: String,
@@ -362,7 +363,9 @@ async fn main() -> Result<(), std::io::Error> {
         app_state.lock().unwrap().meter_sender = Some(tx);
     }
     if let Some(profile_name) = read_default_profile_name() {
-        let _ = load_profile_from_file(app_state.clone(), &profile_name);
+        if load_profile_from_file(app_state.clone(), &profile_name).is_ok() {
+            app_state.lock().unwrap().default_profile = profile_name;
+        }
     }
     tokio::spawn(aquire_data(app_state.clone()));
     tokio::spawn(aquire_i2c_data(app_state.clone()));
@@ -426,7 +429,13 @@ async fn config_post(
         }
     };
     let mut state = state.lock().unwrap();
+    let mut persist_config = false;
     println!("FormData: {:?}", form_data);
+    if form_data.contains_key("call_sign") {
+        state.call_sign = form_data.get("call_sign").unwrap().trim().to_string();
+        println!("Callsign added: {}", state.call_sign);
+        persist_config = true;
+    }
     if form_data.contains_key("save_tci")
         || form_data.contains_key("start_tci")
         || form_data.contains_key("stop_tci")
@@ -474,6 +483,7 @@ async fn config_post(
             if state.follow_me { "ON" } else { "OFF" },
             state.tci_watchdog_secs
         );
+        persist_config = true;
     }
     if form_data.contains_key("save_cat")
         || form_data.contains_key("start_cat")
@@ -548,11 +558,18 @@ async fn config_post(
             if state.cat_enabled { "ON" } else { "OFF" },
             state.cat_watchdog_secs
         );
+        persist_config = true;
     }
     if state.cat_enabled && state.follow_me {
         state.follow_me = false;
         state.pending_tci_band = None;
         state.status = "CAT and TCI cannot both be enabled; CAT kept ON, TCI turned OFF".to_string();
+        persist_config = true;
+    }
+    if persist_config {
+        if let Err(err) = persist_current_profile(&mut state, false) {
+            state.status = format!("Settings updated but profile save failed: {}", err);
+        }
     }
 
     if state.enc.is_some()  {
@@ -695,10 +712,6 @@ async fn config_post(
             form_data.get("PinB").unwrap(),
         );
     }
-    if form_data.clone().contains_key("call_sign") {
-        state.call_sign = form_data.get("call_sign").unwrap().clone();
-        println!("Callsign added: {}", state.call_sign);
-    }
     Redirect::to("/config")
 }
 
@@ -760,6 +773,7 @@ async fn config_get(State(state): State<Arc<Mutex<AppState>>>) -> Html<String> {
             output
         },
         pins: state.gpio_pins.clone(),
+        call_sign: state.call_sign.clone(),
         tci_server: state.tci_server.clone(),
         follow_me: state.follow_me,
         tci_status: state.tci_status.clone(),
@@ -1816,11 +1830,17 @@ fn sleep_save(state: Arc<Mutex<AppState>>) {
     state_lck.enable_pin.lock().unwrap().set_high();
     println!("Sleep_Save Ran");
     state_lck.sw_pos = None;
+    if persist_current_profile(&mut state_lck, true).is_ok() {
+        state_lck.status = "All data successfully saved !".to_string();
+    }
+}
+
+fn persist_current_profile(state_lck: &mut AppState, notify_meter: bool) -> Result<(), String> {
     let file_path = path::Path::new(&state_lck.file);
-    let dir = env::current_dir().unwrap();
+    let dir = env::current_dir().map_err(|e| e.to_string())?;
     let full_path = dir.join("static").join(file_path);
-    if !fs::exists(&full_path).unwrap() {
-        let _ = fs::File::create(&full_path);
+    if !fs::exists(&full_path).map_err(|e| e.to_string())? {
+        fs::File::create(&full_path).map_err(|e| e.to_string())?;
     }
     let mut saved_state = StoredData::new();
     if let Some(enc) = state_lck.clone().enc {
@@ -1848,17 +1868,15 @@ fn sleep_save(state: Arc<Mutex<AppState>>) {
     saved_state.rig_baud = state_lck.rig_baud;
     saved_state.rig_civaddr = state_lck.rig_civaddr.clone();
     saved_state.rig_extra_conf = state_lck.rig_extra_conf.clone();
-    println!("Attempting to save data");
-    if let Ok(output_data) = serde_json::to_string_pretty(&saved_state) {
-        println!("Saving file to {}", full_path.to_string_lossy());
-        if fs::write(full_path, output_data).is_ok() {
-            state_lck.status = "All data successfully saved !".to_string();
-            if let Some(tx) = state_lck.meter_sender.clone() {
-                let _ = tx.send(true);
-            }
+    let output_data = serde_json::to_string_pretty(&saved_state).map_err(|e| e.to_string())?;
+    println!("Saving file to {}", full_path.to_string_lossy());
+    fs::write(full_path, output_data).map_err(|e| e.to_string())?;
+    if notify_meter {
+        if let Some(tx) = state_lck.meter_sender.clone() {
+            let _ = tx.send(true);
         }
     }
-    
+    Ok(())
 }
 //Assistant function to store route
 fn store_data_creator<F>(state_lck: &mut AppState, data: &mut HashMap<String,u32>, callback: F) -> HashMap<String, u32>

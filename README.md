@@ -80,6 +80,8 @@ If startup fails with `Address already in use`, another `amplifier` process is a
 - The config page now groups controls into `Hardware Setup`, `Stepper Calibration and Features`, `Profiles`, and `Radio Follow`
 - The old assignment table is replaced with separate Encoder, Tune, Inductor, and Load cards so each axis can be reviewed and calibrated independently
 - The Radio Follow section now exposes watchdog timer values and explicit start/stop actions for both TCI and CAT
+- Config-page updates to TCI/CAT settings and callsign now persist immediately to the active profile instead of waiting for a separate save action
+- The config page now reads `Latest Status` directly from the live `/sse` stream
 - The config layout includes an LCD-specific compact breakpoint so the Pi touchscreen view uses tighter spacing than the desktop browser view
 
 ### LCD and touchscreen setup
@@ -123,7 +125,7 @@ The old path `scripts/install-amplifier-controls.sh` now delegates to the root i
 ## Profile handling
 
 - Config-page profile loads now report explicit success or failure
-- Setting a default profile updates visible status text instead of failing silently
+- Setting a default profile updates visible status text instead of failing silently, and the saved default is shown correctly again after service restart
 - Profile file lists are sorted deterministically in the UI
 - `static/test.json` is covered by a regression test to confirm it remains loadable and structurally valid
 

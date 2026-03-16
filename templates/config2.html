@@ -527,82 +527,139 @@
 
     @media (max-height: 820px) {
       .cfg-page {
-        padding: 6px;
+        padding: 4px;
         min-height: 100dvh;
       }
 
       .cfg-shell {
-        max-height: calc(100dvh - 12px);
+        max-height: calc(100dvh - 8px);
         display: grid;
         grid-template-rows: auto 1fr;
       }
 
       .cfg-hero {
-        padding: 10px 12px 8px;
+        padding: 8px 10px 6px;
+      }
+
+      .cfg-hero-top {
+        margin-bottom: 8px;
+        gap: 8px;
       }
 
       .cfg-hero h1 {
-        font-size: 20px;
+        font-size: 18px;
+      }
+
+      .cfg-hero p,
+      .cfg-section-head p,
+      .cfg-subtle {
+        display: none;
+      }
+
+      .cfg-summary-card span {
+        margin-bottom: 4px;
+        font-size: 10px;
+      }
+
+      .cfg-summary-card strong {
+        font-size: 12px;
       }
 
       .cfg-summary-card {
-        padding: 7px 9px;
+        padding: 6px 8px;
       }
 
       .cfg-body {
-        padding: 10px 12px 12px;
-        gap: 10px;
+        padding: 8px 10px 10px;
+        gap: 8px;
         overflow-y: auto;
         min-height: 0;
       }
 
       .cfg-section {
-        padding: 8px;
+        padding: 7px;
+      }
+
+      .cfg-status {
+        padding: 8px 10px;
+      }
+
+      .cfg-status span {
+        margin-bottom: 2px;
+        font-size: 10px;
+      }
+
+      .cfg-status div {
+        font-size: 12px;
       }
 
       .cfg-card {
-        padding: 8px;
-        gap: 7px;
+        padding: 7px;
+        gap: 6px;
       }
 
       .cfg-card h3,
       .cfg-assignment h3 {
-        font-size: 13px;
+        font-size: 12px;
       }
 
       .cfg-section-head {
-        gap: 10px;
-        margin-bottom: 8px;
+        gap: 8px;
+        margin-bottom: 6px;
+      }
+
+      .cfg-section-head-left {
+        gap: 4px;
       }
 
       .cfg-section-head h2 {
-        font-size: 16px;
+        font-size: 15px;
+      }
+
+      .cfg-pill {
+        padding: 3px 7px;
+        font-size: 10px;
       }
 
       .cfg-card select,
       .cfg-card input[type="text"] {
-        padding: 6px 7px;
-        font-size: 11px;
+        padding: 5px 6px;
+        font-size: 10px;
       }
 
       .cfg-actions {
-        gap: 6px;
+        gap: 5px;
       }
 
       .cfg-summary {
-        gap: 8px;
+        gap: 6px;
       }
 
       .cfg-grid-2,
       .cfg-grid-3,
       .cfg-assignments {
-        gap: 8px;
+        gap: 6px;
+      }
+
+      .cfg-assignment.compact {
+        padding: 6px;
+        gap: 5px;
+      }
+
+      .cfg-assignment.compact .cfg-meta-row {
+        grid-template-columns: 42px minmax(0, 1fr);
+        gap: 4px;
+        font-size: 10px;
+      }
+
+      .cfg-assignment.compact .cfg-meta-row span {
+        font-size: 8px;
       }
 
       .cfg-assignment.compact .button,
       .cfg-assignment.compact input[type="submit"] {
-        min-height: 30px;
-        font-size: 10px;
+        min-height: 28px;
+        font-size: 9px;
       }
     }
   </style>
@@ -701,7 +758,7 @@
             <form action="#" method="post" enctype="multipart/form-data">
               <div class="cfg-field">
                 <label for="call_sign">Callsign</label>
-                <input id="call_sign" type="text" name="call_sign" placeholder="e.g. KD4YAI" />
+                <input id="call_sign" type="text" name="call_sign" placeholder="e.g. KD4YAI" value="{{ call_sign }}" />
               </div>
               <div class="cfg-actions">
                 <input type="submit" name="submit" value="Save Callsign" />
@@ -1098,14 +1155,20 @@ document.getElementById("follow_me")?.addEventListener("change", () => syncFollo
 document.getElementById("cat_enabled")?.addEventListener("change", () => syncFollowModeChecks("cat"));
 
 const statusBar = document.getElementById("status_bar");
-window.addEventListener("message", event => {
-  if (!statusBar) return;
-  if (event.origin !== window.location.origin) {
-    statusBar.textContent = "Security warning: blocked cross-origin status update.";
-    return;
-  }
-  statusBar.textContent = `Latest result: ${event.data}`;
-});
+if (statusBar) {
+  const configStatusStream = new EventSource("/sse");
+  configStatusStream.onmessage = event => {
+    try {
+      const meterValues = JSON.parse(event.data);
+      statusBar.textContent = meterValues.status || "No recent status.";
+    } catch (_err) {
+      statusBar.textContent = "Status stream parse error.";
+    }
+  };
+  configStatusStream.onerror = () => {
+    statusBar.textContent = "Status stream disconnected.";
+  };
+}
 </script>
 </body>
 </html>
