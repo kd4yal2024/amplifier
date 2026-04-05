@@ -29,6 +29,17 @@
 - Added Tune reference sensor controls and safety status to the config page
 - Removed the panic-prone `Mcp::Default` implementation because MCP construction depends on live I2C hardware
 
+### Installer and LCD setup
+
+- Expanded `install-amplifier-controls.sh` so it now provisions the complete LCD session path instead of only adding touch mappings
+- Added Raspberry Pi boot-config installation for the Waveshare DSI panel overlay in `/boot/firmware/config.txt`
+- Added installer-managed `~/.config/labwc/autostart` with the `systemd-inhibit` keep-awake rule used to prevent the LCD/touch stack from failing after idle sleep
+- Added installer-managed `~/.config/kanshi/config` and `config.init` so `DSI-1` stays primary and HDMI is placed to the right when both displays are connected
+- Added installer-managed `~/.config/autostart/amplifier-kiosk.desktop` so Chromium launches fullscreen on the LCD at login
+- Expanded the touch-mapping install step to include the previously observed Goodix `005d`, Goodix `0014`, and ft5x06 touchscreen device names
+- Removed stale Chromium `MoveTo` rules from `labwc` during install so the kiosk window is not forced onto HDMI
+- Fixed the installer Rust environment sourcing to use the resolved install user's home instead of the invoking shell's `HOME`
+
 ### Verification
 
 - Kept `cargo test --quiet` passing across the hardening passes

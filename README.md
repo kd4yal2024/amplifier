@@ -89,7 +89,13 @@ If startup fails with `Address already in use`, another `amplifier` process is a
 - The production UI is expected to run on the Raspberry Pi DSI panel as output `DSI-1`
 - The touchscreen controller currently appears as `10-0014 Goodix Capacitive TouchScreen` on this hardware
 - `labwc` must map that Goodix device to `DSI-1`, otherwise touch can appear dead or land on the wrong screen coordinates while a mouse still works
-- The main installer now ensures these `Goodix ... 0014` touch mappings exist in `~/.config/labwc/rc.xml` and tries to reload `labwc`
+- The main installer now provisions the full LCD path:
+  `dtoverlay=vc4-kms-dsi-waveshare-panel,8_0_inch` in `/boot/firmware/config.txt`,
+  the `labwc` touch mappings in `~/.config/labwc/rc.xml`,
+  a `systemd-inhibit` keep-awake rule in `~/.config/labwc/autostart`,
+  a `kanshi` layout that keeps `DSI-1` at `0,0`,
+  and a Chromium kiosk autostart entry in `~/.config/autostart/amplifier-kiosk.desktop`
+- The installer also removes stale Chromium move rules from `labwc` so the kiosk opens fullscreen on the LCD instead of being forced onto HDMI
 - If touch stops working after a desktop reset, verify the device name with `libinput list-devices` and confirm the matching `<touch ... mapToOutput="DSI-1" />` entry exists in `~/.config/labwc/rc.xml`
 
 ## Installer scripts
@@ -102,7 +108,11 @@ If startup fails with `Address already in use`, another `amplifier` process is a
 - Installs services for `INSTALL_USER`, defaulting to `${SUDO_USER}` when present or `pi` otherwise
 - Installs the release binary to `/usr/local/bin/amplifier`
 - Provisions the currently checked-out application binary, including the latest compiled Askama templates such as the config page
-- Ensures that install user's `labwc` config contains the Goodix touchscreen-to-`DSI-1` mapping needed for touch input on the LCD
+- Ensures that install user's `labwc` config contains the known Goodix and ft5x06 touchscreen-to-`DSI-1` mappings needed for touch input on the LCD
+- Installs `~/.config/labwc/autostart` with the `systemd-inhibit --what=idle:sleep` rule so the LCD session does not blank and fail to recover after idle
+- Installs `~/.config/kanshi/config` and `config.init` with `DSI-1` as the primary output and HDMI positioned to the right when both are present
+- Installs `~/.config/autostart/amplifier-kiosk.desktop` so Chromium starts fullscreen on the LCD at login
+- Ensures `/boot/firmware/config.txt` includes the Waveshare DSI overlay and related LCD boot settings
 - Verifies that `amplifier.service` reaches `active` state and that the HTTP port is actually listening
 
 The old path `scripts/install-amplifier-controls.sh` now delegates to the root installer for backward compatibility.
@@ -179,6 +189,24 @@ If the `0014` entries are missing, rerun the installer or add the `mapToOutput="
 ```bash
 LABWC_PID="$(pgrep -u pi -x labwc | head -n1)" labwc --reconfigure
 ```
+
+### LCD boots black or on the wrong screen
+
+Check the Pi boot overlay:
+
+```bash
+grep -nE 'display_auto_detect|max_framebuffers|vc4-kms-dsi-waveshare-panel' /boot/firmware/config.txt
+```
+
+Check the desktop layout and kiosk files:
+
+```bash
+sed -n '1,80p' ~/.config/kanshi/config
+sed -n '1,80p' ~/.config/autostart/amplifier-kiosk.desktop
+sed -n '1,40p' ~/.config/labwc/autostart
+```
+
+If those are stale or missing, rerun `./install-amplifier-controls.sh`. If `/boot/firmware/config.txt` changed, reboot once so the DSI overlay is applied.
 
 ### Reinstall safety check
 
