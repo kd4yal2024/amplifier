@@ -39,9 +39,25 @@ use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 const ENABLE_PIN: u8 = 16;
 const DEFAULT_WATCHDOG_SECS: u64 = 15;
+const TUNE_HOME_TOLERANCE_STEPS: i32 = 20;
+const ALL_BAND_KEYS: [&str; 6] = ["10M", "11M", "15M", "20M", "40M", "80M"];
 
 fn default_watchdog_secs() -> u64 {
     DEFAULT_WATCHDOG_SECS
+}
+
+fn first_available_profile_name() -> Option<String> {
+    let static_dir = env::current_dir().ok()?.join("static");
+    let mut files: Vec<String> = fs::read_dir(static_dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            name.ends_with(".json").then_some(name)
+        })
+        .collect();
+    files.sort_unstable();
+    files.into_iter().next()
 }
 
 #[derive(Template)]
@@ -71,6 +87,10 @@ struct ConfigTemplate {
     rig_baud: u32,
     rig_civaddr: String,
     rig_extra_conf: String,
+    tune_reference_pin: String,
+    tune_reference_active_low: bool,
+    tune_homed: bool,
+    tune_fault: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -168,6 +188,10 @@ struct StoredData {
     rig_civaddr: String,
     #[serde(default)]
     rig_extra_conf: String,
+    #[serde(default)]
+    tune_reference_pin: Option<u8>,
+    #[serde(default = "default_true")]
+    tune_reference_active_low: bool,
 }
 impl StoredData {
     fn new() -> Self {
@@ -193,9 +217,12 @@ impl StoredData {
             rig_baud: 0,
             rig_civaddr: String::new(),
             rig_extra_conf: String::new(),
+            tune_reference_pin: None,
+            tune_reference_active_low: true,
         }
     }
 }
+fn default_true() -> bool { true }
 #[derive(Clone)]
 struct AppState {
     //event_sender: broadcast::Sender<SseData>,
@@ -237,14 +264,18 @@ struct AppState {
     pending_cat_band: Option<Bands>,
     default_profile: String,
     meter_sender: Option<mpsc::Sender<bool>>,
+    tune_reference_pin: Option<u8>,
+    tune_reference_active_low: bool,
+    tune_homed: bool,
+    tune_fault: Option<String>,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Copy, Serialize, Deserialize)]
 enum Select {
     Tune,
     Ind,
     Load,
 }
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Copy, Serialize, Deserialize, Debug, PartialEq, Eq)]
 enum Bands {
     M10,
     M11,
@@ -271,29 +302,47 @@ struct PwrBtns {
     bands: [Mcp23017; 5],
 }
 impl PwrBtns {
-    fn new() -> Self {
-        let mcp = Mcp::new();
-        Self {
-            Blwr: [*mcp.pins.get("A0").unwrap()],
-            Fil: [*mcp.pins.get("A1").unwrap(), *mcp.pins.get("A2").unwrap()],
-            HV: [*mcp.pins.get("A3").unwrap(), *mcp.pins.get("A4").unwrap()],
-            Oper: [*mcp.pins.get("A5").unwrap()],
-            bands: [*mcp.pins.get("B0").unwrap(),
-                    *mcp.pins.get("B1").unwrap(),
-                    *mcp.pins.get("B2").unwrap(),
-                    *mcp.pins.get("B3").unwrap(),
-                    *mcp.pins.get("B4").unwrap(),],
-            mcp: {let mut output  = Mcp::new();
-                output.init();
-                output}
-
-        }
+    fn new() -> Result<Self, String> {
+        let mut mcp = Mcp::new()?;
+        mcp.init()?;
+        Ok(Self {
+            Blwr: [*mcp.pins.get("A0").ok_or_else(|| "Missing MCP pin A0".to_string())?],
+            Fil: [
+                *mcp.pins.get("A1").ok_or_else(|| "Missing MCP pin A1".to_string())?,
+                *mcp.pins.get("A2").ok_or_else(|| "Missing MCP pin A2".to_string())?,
+            ],
+            HV: [
+                *mcp.pins.get("A3").ok_or_else(|| "Missing MCP pin A3".to_string())?,
+                *mcp.pins.get("A4").ok_or_else(|| "Missing MCP pin A4".to_string())?,
+            ],
+            Oper: [*mcp.pins.get("A5").ok_or_else(|| "Missing MCP pin A5".to_string())?],
+            bands: [
+                *mcp.pins.get("B0").ok_or_else(|| "Missing MCP pin B0".to_string())?,
+                *mcp.pins.get("B1").ok_or_else(|| "Missing MCP pin B1".to_string())?,
+                *mcp.pins.get("B2").ok_or_else(|| "Missing MCP pin B2".to_string())?,
+                *mcp.pins.get("B3").ok_or_else(|| "Missing MCP pin B3".to_string())?,
+                *mcp.pins.get("B4").ok_or_else(|| "Missing MCP pin B4".to_string())?,
+            ],
+            mcp,
+        })
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), std::io::Error> {
     let (tx, _rx) = broadcast::channel(1024);
+    let enable_pin = {
+        let gpio = Gpio::new()
+            .map_err(|err| std::io::Error::other(format!("Enable GPIO init failed: {err}")))?;
+        let mut pin = gpio
+            .get(ENABLE_PIN)
+            .map_err(|err| std::io::Error::other(format!("Enable pin {ENABLE_PIN} init failed: {err}")))?
+            .into_output();
+        pin.set_high();
+        Arc::new(Mutex::new(pin))
+    };
+    let pwr_btns = PwrBtns::new()
+        .map_err(std::io::Error::other)?;
     let app_state = Arc::new(Mutex::new(AppState {
         tune: Arc::new(Mutex::new(Stepper::new("tune"))),
         ind: Arc::new(Mutex::new(Stepper::new("ind"))),
@@ -309,13 +358,8 @@ async fn main() -> Result<(), std::io::Error> {
         },
         file: String::from("amplifier.json"),
         sleep: false,
-        enable_pin: {
-            let gpio = Gpio::new().unwrap();
-            let mut pin = gpio.get(ENABLE_PIN).unwrap().into_output();
-            pin.set_high();
-            Arc::new(Mutex::new(pin))
-        },
-        pwr_btns : PwrBtns::new(),
+        enable_pin,
+        pwr_btns,
         pwr_btns_state: HashMap::from([
                 ("Blwr".to_string(), ["OFF".to_string(), "OFF".to_string()]),
                 ("Fil".to_string(), ["OFF".to_string(), "OFF".to_string()]),
@@ -357,15 +401,36 @@ async fn main() -> Result<(), std::io::Error> {
         pending_cat_band: None,
         default_profile: String::new(),
         meter_sender: None,
+        tune_reference_pin: None,
+        tune_reference_active_low: true,
+        tune_homed: false,
+        tune_fault: None,
     }));
     {
         let (tx, _rx) = mpsc::channel();
         app_state.lock().unwrap().meter_sender = Some(tx);
     }
     if let Some(profile_name) = read_default_profile_name() {
-        if load_profile_from_file(app_state.clone(), &profile_name).is_ok() {
-            app_state.lock().unwrap().default_profile = profile_name;
+        match load_profile_from_file(app_state.clone(), &profile_name) {
+            Ok(()) => app_state.lock().unwrap().default_profile = profile_name,
+            Err(err) => {
+                app_state.lock().unwrap().status = format!("Default profile load failed: {err}");
+            }
         }
+    } else if let Some(profile_name) = first_available_profile_name() {
+        match load_profile_from_file(app_state.clone(), &profile_name) {
+            Ok(()) => {
+                app_state.lock().unwrap().status =
+                    format!("No default profile configured. Loaded {profile_name} as startup fallback.");
+            }
+            Err(err) => {
+                app_state.lock().unwrap().status =
+                    format!("No default profile configured and fallback load failed: {err}");
+            }
+        }
+    } else {
+        app_state.lock().unwrap().status =
+            "No default profile configured and no saved profiles were found.".to_string();
     }
     tokio::spawn(aquire_data(app_state.clone()));
     tokio::spawn(aquire_i2c_data(app_state.clone()));
@@ -386,7 +451,9 @@ async fn main() -> Result<(), std::io::Error> {
             eprintln!("Failed to bind amplifier HTTP listener on {bind_addr}: {err}");
             err
         })?;
-    tracing::debug!("listening on {}", listener.local_addr().unwrap());
+    if let Ok(addr) = listener.local_addr() {
+        tracing::debug!("listening on {}", addr);
+    }
     let assets_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets");
     let static_files_service = ServeDir::new(assets_dir).append_index_html_on_directories(true);
     // build our application with a route
@@ -398,7 +465,7 @@ async fn main() -> Result<(), std::io::Error> {
             "/",
             get(|| async {
                 let template = IndexTemplate {};
-                Html(template.render().unwrap())
+                Html(template.render().unwrap_or_else(|_| "Template render failed".to_string()))
             }),
         )
         //.route("/", get(default))
@@ -434,6 +501,36 @@ async fn config_post(
     if form_data.contains_key("call_sign") {
         state.call_sign = form_data.get("call_sign").unwrap().trim().to_string();
         println!("Callsign added: {}", state.call_sign);
+        persist_config = true;
+    }
+    if form_data.contains_key("save_tune_reference")
+        || form_data.contains_key("tune_reference_pin")
+        || form_data.contains_key("tune_reference_active_low")
+    {
+        let new_pin = match form_data.get("tune_reference_pin").map(|pin| pin.trim()) {
+            Some("") | Some("None") | None => None,
+            Some(pin) => match pin.parse::<u8>() {
+                Ok(pin) => Some(pin),
+                Err(_) => {
+                    state.status = "Invalid Tune reference GPIO".to_string();
+                    return Redirect::to("/config");
+                }
+            },
+        };
+        let mut tune_reference_pin = state.tune_reference_pin;
+        if let Err(err) = assign_optional_pin(&mut state.gpio_pins, &mut tune_reference_pin, new_pin) {
+            state.status = err;
+            return Redirect::to("/config");
+        }
+        state.tune_reference_pin = tune_reference_pin;
+        state.tune_reference_active_low = form_data.contains_key("tune_reference_active_low");
+        state.tune_homed = false;
+        clear_tune_fault(&mut state);
+        refresh_tune_reference_status(&mut state);
+        state.status = match state.tune_reference_pin {
+            Some(pin) => format!("Tune reference sensor configured on GPIO {pin}"),
+            None => "Tune reference sensor cleared".to_string(),
+        };
         persist_config = true;
     }
     if form_data.contains_key("save_tci")
@@ -536,16 +633,28 @@ async fn config_post(
                 return Redirect::to("/config");
             }
         }
-        if let Some(model_id) = form_data.get("rig_model_id") {
-            let model_id = model_id.trim();
-            state.rig_model_id = model_id.parse::<i32>().unwrap_or(0);
+        if form_data.contains_key("rig_model_id") {
+            match parse_optional_i32_field(&form_data, "rig_model_id", "rig model ID") {
+                Ok(Some(model_id)) => state.rig_model_id = model_id,
+                Ok(None) => state.rig_model_id = 0,
+                Err(err) => {
+                    state.status = err;
+                    return Redirect::to("/config");
+                }
+            }
         }
         if let Some(dev) = form_data.get("rig_serial_device") {
             state.rig_serial_device = dev.trim().to_string();
         }
-        if let Some(baud) = form_data.get("rig_baud") {
-            let baud = baud.trim();
-            state.rig_baud = baud.parse::<u32>().unwrap_or(0);
+        if form_data.contains_key("rig_baud") {
+            match parse_optional_u32_field(&form_data, "rig_baud", "rig baud") {
+                Ok(Some(baud)) => state.rig_baud = baud,
+                Ok(None) => state.rig_baud = 0,
+                Err(err) => {
+                    state.status = err;
+                    return Redirect::to("/config");
+                }
+            }
         }
         if let Some(addr) = form_data.get("rig_civaddr") {
             state.rig_civaddr = addr.trim().to_string();
@@ -578,7 +687,7 @@ async fn config_post(
             let pin_b = state.enc.clone().unwrap().pin_b;
             let _ = process_pins(&mut state.gpio_pins, pin_a, false);
             let _ = process_pins(&mut state.gpio_pins, pin_b, false);
-            *state.enc.clone().unwrap().stop.lock().unwrap() = true;
+            state.enc.clone().unwrap().stop();
             state.enc = None;
             state.status = "Encoder has benn deleted!".to_string();
             
@@ -617,13 +726,20 @@ async fn config_post(
             } 
         else if form_data.contains_key("start") {
             state.sw_pos = None;
-            match form_data.get("start").unwrap().as_str() {
+            let Some(start_target) = form_data.get("start").map(String::as_str) else {
+                state.status = "Missing start target".to_string();
+                return Redirect::to("/config");
+            };
+            match start_target {
                 "tune" => {
                     if let Some(tx) = state.meter_sender.clone() {
                         let _ = tx.send(false);
                     }
                     let state_tune = state.tune.lock().unwrap();
                     state_tune.pos.store(0, Ordering::Relaxed);
+                    drop(state_tune);
+                    state.tune_homed = true;
+                    clear_tune_fault(&mut state);
                 }
                 "ind" => {
                     if let Some(tx) = state.meter_sender.clone() {
@@ -643,7 +759,11 @@ async fn config_post(
             }
         }  
         else if form_data.contains_key("max") {
-            match form_data.get("max").unwrap().as_str() {
+            let Some(max_target) = form_data.get("max").map(String::as_str) else {
+                state.status = "Missing max target".to_string();
+                return Redirect::to("/config");
+            };
+            match max_target {
                 "tune" => {
                     if let Some(tx) = state.meter_sender.clone() {
                         let _ = tx.send(false);
@@ -669,7 +789,11 @@ async fn config_post(
             }
             println!("Max was set");
         }  else if form_data.contains_key("reset") {
-            match form_data.get("reset").unwrap().as_str() {
+            let Some(reset_target) = form_data.get("reset").map(String::as_str) else {
+                state.status = "Missing reset target".to_string();
+                return Redirect::to("/config");
+            };
+            match reset_target {
                 "tune" => {
                     if let Some(tx) = state.meter_sender.clone() {
                         let _ = tx.send(false);
@@ -694,22 +818,39 @@ async fn config_post(
                 _ => println!("Invalid argument")
             }
         }
-    } else if form_data.contains_key("PinA") && form_data.contains_key("PinB")
-        && form_data.get("PinA").unwrap() != "" && form_data.get("PinB").unwrap() != "" {
-        let pin_a = form_data.get("PinA").unwrap().parse().unwrap();
-        let pin_b = form_data.get("PinB").unwrap().parse().unwrap();
+    } else if form_data.contains_key("PinA") && form_data.contains_key("PinB") {
+        let pin_a = match parse_optional_u8_field(&form_data, "PinA", "encoder Pin A") {
+            Ok(Some(pin)) => pin,
+            Ok(None) => return Redirect::to("/config"),
+            Err(err) => {
+                state.status = err;
+                return Redirect::to("/config");
+            }
+        };
+        let pin_b = match parse_optional_u8_field(&form_data, "PinB", "encoder Pin B") {
+            Ok(Some(pin)) => pin,
+            Ok(None) => return Redirect::to("/config"),
+            Err(err) => {
+                state.status = err;
+                return Redirect::to("/config");
+            }
+        };
         state.enc = Some(Encoder::new(
             pin_a,
             pin_b,
         ));
-        let _ = state.enc.clone().unwrap().run();
-        let _ = process_pins(&mut state.gpio_pins, form_data.get("PinA").unwrap().parse().unwrap(), true);
-        let _ = process_pins(&mut state.gpio_pins, form_data.get("PinB").unwrap().parse().unwrap(), true);
+        if let Err(err) = state.enc.clone().unwrap().run() {
+            state.status = err;
+            state.enc = None;
+            return Redirect::to("/config");
+        }
+        let _ = process_pins(&mut state.gpio_pins, pin_a, true);
+        let _ = process_pins(&mut state.gpio_pins, pin_b, true);
         println!("Encoder Added");
         state.status = format!(
             "Encoder Added on pins: {:?}, {:?}",
-            form_data.get("PinA").unwrap(),
-            form_data.get("PinB").unwrap(),
+            pin_a,
+            pin_b,
         );
     }
     Redirect::to("/config")
@@ -759,18 +900,18 @@ async fn config_get(State(state): State<Arc<Mutex<AppState>>>) -> Html<String> {
             vec!["None".to_string(), "None".to_string(), 1.to_string()]
         },
         files: {
-            let home_path = env::current_dir().unwrap().join("static");
-            let mut output: Vec<String> = Vec::new();
-            let files =
-                fs::read_dir(home_path).unwrap();
-            files.for_each(|f| {
-                let temp_file = f.unwrap().file_name().to_string_lossy().to_string();
-                if temp_file.ends_with("json") {
-                    output.push(temp_file);
-                }
-            });
-            output.sort_unstable();
-            output
+            let mut files = Vec::new();
+            if let Ok(home_path) = env::current_dir().map(|dir| dir.join("static"))
+                && let Ok(entries) = fs::read_dir(home_path)
+            {
+                files = entries
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.file_name().to_string_lossy().to_string())
+                    .filter(|name| name.ends_with(".json"))
+                    .collect();
+                files.sort_unstable();
+            }
+            files
         },
         pins: state.gpio_pins.clone(),
         call_sign: state.call_sign.clone(),
@@ -787,6 +928,13 @@ async fn config_get(State(state): State<Arc<Mutex<AppState>>>) -> Html<String> {
         rig_baud: state.rig_baud,
         rig_civaddr: state.rig_civaddr.clone(),
         rig_extra_conf: state.rig_extra_conf.clone(),
+        tune_reference_pin: state
+            .tune_reference_pin
+            .map(|pin| pin.to_string())
+            .unwrap_or_else(|| "None".to_string()),
+        tune_reference_active_low: state.tune_reference_active_low,
+        tune_homed: state.tune_homed,
+        tune_fault: state.tune_fault.clone().unwrap_or_default(),
     };
     Html(template.render().unwrap().to_string())
 }
@@ -848,6 +996,171 @@ fn band_to_key(band: &Bands) -> &'static str {
         Bands::M20 => "20M",
         Bands::M40 => "40M",
         Bands::M80 => "80M",
+    }
+}
+
+fn set_tune_fault(state: &mut AppState, message: impl Into<String>) {
+    let message = message.into();
+    state.tune_fault = Some(message.clone());
+    state.tune_homed = false;
+    state.status = format!("Tune fault: {message}");
+}
+
+fn clear_tune_fault(state: &mut AppState) {
+    state.tune_fault = None;
+}
+
+fn read_reference_sensor(pin: u8, active_low: bool) -> Result<bool, String> {
+    let gpio = Gpio::new().map_err(|e| format!("Reference GPIO init failed: {e}"))?;
+    let level = gpio
+        .get(pin)
+        .map_err(|e| format!("Reference pin {pin} init failed: {e}"))?
+        .into_input_pullup()
+        .read();
+    Ok(if active_low {
+        level == rppal::gpio::Level::Low
+    } else {
+        level == rppal::gpio::Level::High
+    })
+}
+
+fn refresh_tune_reference_status(state: &mut AppState) {
+    let Some(pin) = state.tune_reference_pin else {
+        state.tune_homed = false;
+        state.tune_fault = None;
+        return;
+    };
+    let tune_pos = state.tune.lock().unwrap().pos.load(Ordering::Relaxed);
+    match read_reference_sensor(pin, state.tune_reference_active_low) {
+        Ok(true) => {
+            if tune_pos.abs() <= TUNE_HOME_TOLERANCE_STEPS {
+                state.tune_homed = true;
+                clear_tune_fault(state);
+            } else {
+                set_tune_fault(
+                    state,
+                    format!(
+                        "reference sensor active on GPIO {pin}, but tune position is {tune_pos}"
+                    ),
+                );
+            }
+        }
+        Ok(false) => {
+            if state.tune_homed && tune_pos == 0 {
+                state.tune_homed = false;
+            }
+        }
+        Err(err) => set_tune_fault(state, err),
+    }
+}
+
+fn assign_optional_pin(
+    gpio_pins: &mut Vec<u8>,
+    current: &mut Option<u8>,
+    new_pin: Option<u8>,
+) -> Result<(), String> {
+    if *current == new_pin {
+        return Ok(());
+    }
+    if let Some(existing) = *current {
+        if !gpio_pins.contains(&existing) {
+            gpio_pins.push(existing);
+            gpio_pins.sort_unstable();
+        }
+    }
+    if let Some(pin) = new_pin {
+        if let Some(index) = gpio_pins.iter().position(|&available| available == pin) {
+            gpio_pins.remove(index);
+        } else {
+            return Err(format!("GPIO {pin} is already reserved"));
+        }
+    }
+    *current = new_pin;
+    Ok(())
+}
+
+fn wait_for_stepper_shutdown(stepper: &Arc<Mutex<Stepper>>) {
+    for _ in 0..50 {
+        if !stepper.lock().unwrap().is_running() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_for_encoder_shutdown(enc: &Encoder) {
+    for _ in 0..50 {
+        if !enc.is_running() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn validate_stepper_profile(stepper_name: &str, data: &HashMap<String, u32>) -> Result<(), String> {
+    for key in ["pos", "max", "ratio"] {
+        if !data.contains_key(key) {
+            return Err(format!("Profile missing {stepper_name}.{key}"));
+        }
+    }
+    Ok(())
+}
+
+fn parse_required_u8_field(
+    form_data: &HashMap<String, String>,
+    key: &str,
+    label: &str,
+) -> Result<u8, String> {
+    let raw = form_data
+        .get(key)
+        .map(|value| value.trim())
+        .ok_or_else(|| format!("Missing {label}"))?;
+    if raw.is_empty() {
+        return Err(format!("{label} is required"));
+    }
+    raw.parse::<u8>()
+        .map_err(|_| format!("Invalid {label}: {raw}"))
+}
+
+fn parse_optional_u8_field(
+    form_data: &HashMap<String, String>,
+    key: &str,
+    label: &str,
+) -> Result<Option<u8>, String> {
+    match form_data.get(key).map(|value| value.trim()) {
+        Some("") | None => Ok(None),
+        Some(raw) => raw
+            .parse::<u8>()
+            .map(Some)
+            .map_err(|_| format!("Invalid {label}: {raw}")),
+    }
+}
+
+fn parse_optional_i32_field(
+    form_data: &HashMap<String, String>,
+    key: &str,
+    label: &str,
+) -> Result<Option<i32>, String> {
+    match form_data.get(key).map(|value| value.trim()) {
+        Some("") | None => Ok(None),
+        Some(raw) => raw
+            .parse::<i32>()
+            .map(Some)
+            .map_err(|_| format!("Invalid {label}: {raw}")),
+    }
+}
+
+fn parse_optional_u32_field(
+    form_data: &HashMap<String, String>,
+    key: &str,
+    label: &str,
+) -> Result<Option<u32>, String> {
+    match form_data.get(key).map(|value| value.trim()) {
+        Some("") | None => Ok(None),
+        Some(raw) => raw
+            .parse::<u32>()
+            .map(Some)
+            .map_err(|_| format!("Invalid {label}: {raw}")),
     }
 }
 
@@ -1418,8 +1731,24 @@ async fn pwr_btn_handler(State(state): State<Arc<Mutex<AppState>>>, form: Multip
     if form_data.contains_key("ID") {
         let sw = form_data.get("ID").unwrap();
         println!("Switch: {}", sw);
-        let action = form_data.get("value").unwrap();
+        let Some(action) = form_data.get("value") else {
+            state.lock().unwrap().status = "Missing power control action".to_string();
+            return;
+        };
         println!("Action: {}", action);
+        {
+            let mut state_lck = state.lock().unwrap();
+            refresh_tune_reference_status(&mut state_lck);
+            if action == "ON"
+                && matches!(sw.as_str(), "HV" | "Oper")
+                && (state_lck.tune_fault.is_some()
+                    || (state_lck.tune_reference_pin.is_some() && !state_lck.tune_homed))
+            {
+                state_lck.status =
+                    "Blocked power-on: Tune is not homed or has a reference fault".to_string();
+                return;
+            }
+        }
         match sw.as_str() {
             "Blwr" => {
                 let mut state_lck = state.lock().unwrap();
@@ -1453,11 +1782,20 @@ fn step_start<F>(state_lck: &mut AppState, form_data: HashMap<String, String>, n
 where
     F: Fn(&mut AppState) -> [Mcp23017;2],
     {
-        let action = form_data.get("value").unwrap();
+        let Some(action) = form_data.get("value") else {
+            state_lck.status = format!("Missing {} power action", name);
+            return;
+        };
         let my_btns = callback(state_lck);
         let pin1 = my_btns[0];
         let pin2 = my_btns[1];
-        let pin1_status = state_lck.pwr_btns.mcp.read_pin(pin1).unwrap();
+        let pin1_status = match state_lck.pwr_btns.mcp.read_pin(pin1) {
+            Ok(level) => level,
+            Err(err) => {
+                state_lck.status = format!("Power sequencing read failed: {err}");
+                return;
+            }
+        };
         let _ = state_lck.pwr_btns.mcp.set_pin(pin1, if action == "ON" {mcp230xx::Level::High} else {mcp230xx::Level::Low});  
         if form_data.contains_key("delay") {
             let delay = form_data.get("delay").unwrap();
@@ -1576,7 +1914,14 @@ async fn aquire_data(state: Arc<Mutex<AppState>>) {
         sse_output.status = val.status.clone();
         sse_output.tci_status = val.tci_status.clone();
         sse_output.cat_status = val.cat_status.clone();
-        let _ = val.sender.send(serde_json::to_string(&sse_output).unwrap());    
+        match serde_json::to_string(&sse_output) {
+            Ok(payload) => {
+                let _ = val.sender.send(payload);
+            }
+            Err(err) => {
+                eprintln!("SSE serialization failed: {err}");
+            }
+        }
     }
 }
 
@@ -1690,23 +2035,40 @@ where
     let mut state_stepper = stepper.lock().unwrap();
     if add {
         state.sw_pos = None;
-        if form_data.get("PinA").unwrap() != "" && form_data.get("PinB").unwrap() != "" {
-            println!("Adding Stepper");
-            let pin_a: u8 = form_data.get("PinA").unwrap().parse().unwrap();
-            let pin_b: u8 = form_data.get("PinB").unwrap().parse().unwrap();
-            let ratio: u8 = form_data.get("ratio").unwrap().parse().unwrap_or(1);
-            state_stepper.name = name.to_string().to_lowercase();
-            state_stepper.pin_a = Some(pin_a);
-            state_stepper.pin_b = Some(pin_b);
-            state_stepper.ratio = ratio;
-            let _ = process_pins(&mut state.gpio_pins, pin_a, true);
-            let _ = process_pins(&mut state.gpio_pins, pin_b, true);
-            if name == "Ind" {
-                state_stepper.speed = Duration::from_micros(400);
+        let pin_a = match parse_required_u8_field(&form_data, "PinA", &format!("{name} Pin A")) {
+            Ok(pin) => pin,
+            Err(err) => {
+                state.status = err;
+                return;
             }
-            state_stepper.run_2();
-        } else {
-            println!("No pins Selected");
+        };
+        let pin_b = match parse_required_u8_field(&form_data, "PinB", &format!("{name} Pin B")) {
+            Ok(pin) => pin,
+            Err(err) => {
+                state.status = err;
+                return;
+            }
+        };
+        let ratio = match parse_optional_u8_field(&form_data, "ratio", &format!("{name} ratio")) {
+            Ok(Some(ratio)) => ratio,
+            Ok(None) => 1,
+            Err(err) => {
+                state.status = err;
+                return;
+            }
+        };
+        println!("Adding Stepper");
+        state_stepper.name = name.to_string().to_lowercase();
+        state_stepper.pin_a = Some(pin_a);
+        state_stepper.pin_b = Some(pin_b);
+        state_stepper.ratio = ratio;
+        let _ = process_pins(&mut state.gpio_pins, pin_a, true);
+        let _ = process_pins(&mut state.gpio_pins, pin_b, true);
+        if name == "Ind" {
+            state_stepper.speed = Duration::from_micros(400);
+        }
+        if let Err(err) = state_stepper.run_2() {
+            state.status = err;
         }
     } else {
         println!("Resetting {} to default settings", name
@@ -1717,7 +2079,7 @@ where
             let pin_b = state_stepper.pin_b.unwrap();
             let _ = process_pins(&mut state.gpio_pins, pin_a, false);
             let _ = process_pins(&mut state.gpio_pins, pin_b, false);
-            let _ = state_stepper.channel.clone().unwrap().send((state_stepper.pos.load(Ordering::Relaxed) as u32, true));
+            state_stepper.stop();
             state_stepper.pin_a = None;
             state_stepper.pin_b = None;
             state_stepper.ratio = 1;
@@ -1728,6 +2090,9 @@ where
     let ratio = state_stepper.ratio;
     let name: String = state_stepper.name.clone().to_lowercase();
     drop(state_stepper);
+    if !add {
+        wait_for_stepper_shutdown(&stepper);
+    }
     state.status = {
         if add {
             format!("{} Added on Pins: {}, {}, ratio of {}",name, pina, pinb, ratio)
@@ -1740,6 +2105,10 @@ where
 // Assistand function for recall route.
 fn recall_handler (state: Arc<Mutex<AppState>>, band: String, band_enum: Bands, require_stored: bool) -> Result<(), Box< dyn std::error::Error>> {
     let mut state_lck = state.lock().unwrap();
+    refresh_tune_reference_status(&mut state_lck);
+    if let Some(fault) = state_lck.tune_fault.clone() {
+        return Err(Box::new(Error::other(format!("Tune reference fault: {fault}"))));
+    }
     if require_stored
         && !state_lck
             .mem_valid
@@ -1783,12 +2152,25 @@ fn recall_handler (state: Arc<Mutex<AppState>>, band: String, band_enum: Bands, 
             drop(state_lck);
             for x in my_locks {
                 let value = band.clone();
+                let state_for_thread = state.clone();
                 thread::spawn(move || {
                     let temp_lck = x.lock().unwrap().clone();
-                    if temp_lck.pin_a.is_some() { 
-                        let _ = temp_lck.channel.unwrap().send((temp_lck.mem.get(&value).unwrap().load(Ordering::Relaxed) as u32, false));
+                    let Some(target_mem) = temp_lck.mem.get(&value) else {
+                        state_for_thread.lock().unwrap().status =
+                            format!("Recall failed: {} missing memory for {}", temp_lck.name, value);
+                        return;
+                    };
+                    let target_pos = target_mem.load(Ordering::Relaxed);
+                    if temp_lck.pin_a.is_some() {
+                        if let Some(channel) = temp_lck.channel.clone() {
+                            let _ = channel.send((target_pos as u32, false));
+                        } else {
+                            state_for_thread.lock().unwrap().status =
+                                format!("Recall failed: {} motor channel is unavailable", temp_lck.name);
+                            return;
+                        }
                     } else {
-                        temp_lck.pos.store(temp_lck.mem.get(&value).unwrap().load(Ordering::Relaxed), Ordering::Relaxed);
+                        temp_lck.pos.store(target_pos, Ordering::Relaxed);
                     }
                     println!("Run thread ended");
 
@@ -1835,6 +2217,20 @@ fn sleep_save(state: Arc<Mutex<AppState>>) {
     }
 }
 
+fn write_atomic(path: &PathBuf, contents: &str) -> Result<(), String> {
+    let tmp_path = path.with_extension(format!(
+        "tmp-{}-{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    fs::write(&tmp_path, contents).map_err(|e| e.to_string())?;
+    fs::rename(&tmp_path, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp_path);
+        e.to_string()
+    })?;
+    Ok(())
+}
+
 fn persist_current_profile(state_lck: &mut AppState, notify_meter: bool) -> Result<(), String> {
     let file_path = path::Path::new(&state_lck.file);
     let dir = env::current_dir().map_err(|e| e.to_string())?;
@@ -1868,9 +2264,11 @@ fn persist_current_profile(state_lck: &mut AppState, notify_meter: bool) -> Resu
     saved_state.rig_baud = state_lck.rig_baud;
     saved_state.rig_civaddr = state_lck.rig_civaddr.clone();
     saved_state.rig_extra_conf = state_lck.rig_extra_conf.clone();
+    saved_state.tune_reference_pin = state_lck.tune_reference_pin;
+    saved_state.tune_reference_active_low = state_lck.tune_reference_active_low;
     let output_data = serde_json::to_string_pretty(&saved_state).map_err(|e| e.to_string())?;
     println!("Saving file to {}", full_path.to_string_lossy());
-    fs::write(full_path, output_data).map_err(|e| e.to_string())?;
+    write_atomic(&full_path, &output_data)?;
     if notify_meter {
         if let Some(tx) = state_lck.meter_sender.clone() {
             let _ = tx.send(true);
@@ -1909,15 +2307,12 @@ where
     
     }
 
-fn default_profile_path() -> PathBuf {
-    env::current_dir()
-        .unwrap()
-        .join("static")
-        .join("default_profile.txt")
+fn default_profile_path() -> Result<PathBuf, std::io::Error> {
+    Ok(env::current_dir()?.join("static").join("default_profile.txt"))
 }
 
 fn read_default_profile_name() -> Option<String> {
-    let path = default_profile_path();
+    let path = default_profile_path().ok()?;
     if let Ok(contents) = fs::read_to_string(path) {
         let name = contents.trim().to_string();
         if !name.is_empty() {
@@ -1928,13 +2323,31 @@ fn read_default_profile_name() -> Option<String> {
 }
 
 fn write_default_profile_name(file_name: &str) -> Result<(), std::io::Error> {
-    fs::write(default_profile_path(), format!("{}\n", file_name))
+    fs::write(default_profile_path()?, format!("{}\n", file_name))
 }
 
 fn clear_default_profile_name() -> Result<(), std::io::Error> {
-    let path = default_profile_path();
+    let path = default_profile_path()?;
     if path.exists() {
         fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+fn validate_profile(output: &StoredData) -> Result<(), String> {
+    for (name, map) in [("tune", &output.tune), ("ind", &output.ind), ("load", &output.load)] {
+        validate_stepper_profile(name, map)?;
+    }
+    for stepper in ["tune", "ind", "load"] {
+        let mem = output
+            .mem
+            .get(stepper)
+            .ok_or_else(|| format!("Profile missing memory map for {stepper}"))?;
+        for band in ALL_BAND_KEYS {
+            if !mem.contains_key(band) {
+                return Err(format!("Profile missing {stepper} memory for {band}"));
+            }
+        }
     }
     Ok(())
 }
@@ -1946,11 +2359,11 @@ fn load_profile_from_file(state: Arc<Mutex<AppState>>, file_name: &str) -> Resul
         .join(file_name);
     let file_data = fs::read_to_string(full_path).map_err(|e| e.to_string())?;
     let output: StoredData = serde_json::from_str(&file_data).map_err(|e| e.to_string())?;
-    apply_profile_to_state(state, file_name, output);
-    Ok(())
+    validate_profile(&output)?;
+    apply_profile_to_state(state, file_name, output)
 }
 
-fn apply_profile_to_state(state: Arc<Mutex<AppState>>, file_name: &str, output: StoredData) {
+fn apply_profile_to_state(state: Arc<Mutex<AppState>>, file_name: &str, output: StoredData) -> Result<(), String> {
     let mut state_lck = state.lock().unwrap();
     state_lck.file = file_name.to_string();
     let mut my_stepper_arr = [
@@ -1958,62 +2371,78 @@ fn apply_profile_to_state(state: Arc<Mutex<AppState>>, file_name: &str, output: 
         state_lck.ind.clone(),
         state_lck.load.clone(),
     ];
-    let bands = ["10M", "11M", "15M", "20M", "40M", "80M"];
     let my_output_arr = [&output.tune, &output.ind, &output.load];
     for (i, stepper) in my_stepper_arr.iter_mut().enumerate() {
         let name = &stepper.lock().unwrap().name.clone();
         if stepper.lock().unwrap().pin_a.unwrap_or(0u8) != 0 {
             handle_stepper(&mut state_lck, HashMap::new(), name, false, |_| stepper.clone());
         }
-        thread::sleep(Duration::from_millis(10));
-        stepper.lock().unwrap().pin_a = if my_output_arr[i].contains_key("PinA") {Some(*my_output_arr[i].get("PinA").unwrap() as u8)} else {None};
-        stepper.lock().unwrap().pin_b = if my_output_arr[i].contains_key("PinB") {Some(*my_output_arr[i].get("PinB").unwrap() as u8)} else {None};
-        stepper.lock().unwrap().ena = if my_output_arr[i].contains_key("ena") {Some(*my_output_arr[i].get("ena").unwrap() as u8)} else {None};
-        let stored_pos = *my_output_arr[i].get("pos").unwrap() as i32;
-        let mut normalized_max = (*my_output_arr[i].get("max").unwrap() as i32).max(stored_pos);
+        wait_for_stepper_shutdown(stepper);
+        let pin_a = my_output_arr[i].get("PinA").copied().map(|v| v as u8);
+        let pin_b = my_output_arr[i].get("PinB").copied().map(|v| v as u8);
+        let ena = my_output_arr[i].get("ena").copied().map(|v| v as u8);
+        let stored_pos = *my_output_arr[i]
+            .get("pos")
+            .ok_or_else(|| format!("Profile missing {} position", stepper.lock().unwrap().name))? as i32;
+        let mut normalized_max = (*my_output_arr[i]
+            .get("max")
+            .ok_or_else(|| format!("Profile missing {} max", stepper.lock().unwrap().name))? as i32)
+            .max(stored_pos);
         if let Some(stepper_mem) = output.mem.get(&stepper.lock().unwrap().name) {
-            for band in bands {
-                let value = *stepper_mem.get(&band.to_string()).unwrap_or(&0) as i32;
+            for band in ALL_BAND_KEYS {
+                let value = *stepper_mem.get(band).unwrap_or(&0) as i32;
                 normalized_max = normalized_max.max(value);
             }
         }
+        let ratio = *my_output_arr[i]
+            .get("ratio")
+            .ok_or_else(|| format!("Profile missing {} ratio", stepper.lock().unwrap().name))? as u8;
         stepper.lock().unwrap().max.store(normalized_max, Ordering::Relaxed);
         stepper.lock().unwrap().pos.store(stored_pos, Ordering::Relaxed);
-        stepper.lock().unwrap().ratio = *my_output_arr[i].get("ratio").unwrap() as u8;
+        stepper.lock().unwrap().pin_a = pin_a;
+        stepper.lock().unwrap().pin_b = pin_b;
+        stepper.lock().unwrap().ena = ena;
+        stepper.lock().unwrap().ratio = ratio;
         let mut stepper_lck = stepper.lock().unwrap();
         if stepper_lck.name == "ind" {
             println!("Inductor set to lower speed");
             stepper_lck.speed = Duration::from_micros(400);
         }
         if stepper_lck.pin_a.is_some() {
-            stepper_lck.run_2();
+            stepper_lck.run_2()?;
         }
         drop(stepper_lck);
-        for band in bands {
+        for band in ALL_BAND_KEYS {
             let mut stepper_lck = stepper.lock().unwrap();
-            let value = *output.mem.get(&stepper_lck.name).unwrap().get(&band.to_string()).unwrap_or(&0) as i32;
+            let value = *output
+                .mem
+                .get(&stepper_lck.name)
+                .ok_or_else(|| format!("Profile missing {} memory map", stepper_lck.name))?
+                .get(band)
+                .unwrap_or(&0) as i32;
             stepper_lck.mem.entry(band.to_string()).and_modify(|v| v.store(value, Ordering::Relaxed));
         }
     }
     state_lck.enc = if output.enc.contains_key("PinA") && output.enc.contains_key("PinB") {
         if let Some(enc) = &state_lck.enc {
-            *enc.stop.lock().unwrap() = true;
+            enc.stop();
+            wait_for_encoder_shutdown(enc);
             println!("Deconfiguring Encoder to load new config");
         }
         Some(Encoder::new(
-            *output.enc.get("PinA").unwrap() as u8,
-            *output.enc.get("PinB").unwrap() as u8,
+            *output.enc.get("PinA").ok_or_else(|| "Profile missing encoder PinA".to_string())? as u8,
+            *output.enc.get("PinB").ok_or_else(|| "Profile missing encoder PinB".to_string())? as u8,
         ))
     } else {
         None
     };
     if let Some(mut enc) = state_lck.enc.clone() {
-        let _ = enc.run();
+        enc.run()?;
     }
     state_lck.band = output.band;
     state_lck.call_sign = output.call_sign;
     let mut derived: HashMap<String, bool> = HashMap::new();
-    for band in ["10M", "11M", "15M", "20M", "40M", "80M"] {
+    for band in ALL_BAND_KEYS {
         let has_key =
             output.mem.get("tune").and_then(|m| m.get(band)).is_some()
             || output.mem.get("ind").and_then(|m| m.get(band)).is_some()
@@ -2022,7 +2451,7 @@ fn apply_profile_to_state(state: Arc<Mutex<AppState>>, file_name: &str, output: 
         derived.insert(band.to_string(), has_key || file_flag);
     }
     state_lck.mem_valid = derived;
-    for key in ["10M", "11M", "15M", "20M", "40M", "80M"] {
+    for key in ALL_BAND_KEYS {
         state_lck.mem_valid.entry(key.to_string()).or_insert(false);
     }
     if !output.tci_server.is_empty() {
@@ -2066,6 +2495,16 @@ fn apply_profile_to_state(state: Arc<Mutex<AppState>>, file_name: &str, output: 
     if !output.rig_extra_conf.is_empty() {
         state_lck.rig_extra_conf = output.rig_extra_conf;
     }
+    let mut tune_reference_pin = state_lck.tune_reference_pin;
+    assign_optional_pin(
+        &mut state_lck.gpio_pins,
+        &mut tune_reference_pin,
+        output.tune_reference_pin,
+    )?;
+    state_lck.tune_reference_pin = tune_reference_pin;
+    state_lck.tune_reference_active_low = output.tune_reference_active_low;
+    refresh_tune_reference_status(&mut state_lck);
+    Ok(())
 }
 
 //processes all Multi-part form data for all post request handlers.
@@ -2095,7 +2534,7 @@ async fn process_form(mut form: Multipart) -> Result<HashMap<String, String>, St
 
 #[cfg(test)]
 mod tests {
-    use super::{Bands, StoredData};
+    use super::{Bands, StoredData, ALL_BAND_KEYS};
 
     #[test]
     fn test_profile_json_deserializes_and_is_consistent() {
@@ -2107,12 +2546,12 @@ mod tests {
                 .mem
                 .get(stepper)
                 .unwrap_or_else(|| panic!("missing {stepper} memory map"));
-            for band in ["10M", "11M", "15M", "20M", "40M", "80M"] {
+            for band in ALL_BAND_KEYS {
                 assert!(bands.contains_key(band), "{stepper} missing band {band}");
             }
         }
 
-        for band in ["10M", "11M", "15M", "20M", "40M", "80M"] {
+        for band in ALL_BAND_KEYS {
             assert_eq!(
                 profile.mem_valid.get(band),
                 Some(&true),

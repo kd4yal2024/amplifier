@@ -767,6 +767,44 @@
           </article>
         </div>
 
+        <div class="cfg-grid-2" style="margin-top: 14px;">
+          <article class="cfg-card">
+            <h3>Tune Reference Sensor</h3>
+            <p>Assign a home sensor to the Tune axis so the system can detect lost position and block unsafe power-up until Tune is re-homed.</p>
+            <form action="/config" method="post" enctype="multipart/form-data">
+              <div class="cfg-field">
+                <label for="tune_reference_pin">Reference GPIO</label>
+                <select name="tune_reference_pin" id="tune_reference_pin">
+                  <option value="None"{% if tune_reference_pin == "None" %} selected{% endif %}>None</option>
+                  {% if tune_reference_pin != "None" %}
+                  <option value="{{ tune_reference_pin }}" selected>{{ tune_reference_pin }} (Assigned)</option>
+                  {% endif %}
+                  {% for pin in pins %}
+                  <option value="{{ pin }}"{% if tune_reference_pin == pin.to_string() %} selected{% endif %}>{{ pin }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <label class="cfg-inline-check">
+                <input type="checkbox" name="tune_reference_active_low" value="on"{% if tune_reference_active_low %} checked{% endif %} />
+                Sensor active low
+              </label>
+              <div class="cfg-actions">
+                <input name="save_tune_reference" type="submit" value="Save Tune Sensor" />
+              </div>
+            </form>
+          </article>
+
+          <article class="cfg-card">
+            <h3>Tune Safety Status</h3>
+            <div class="cfg-meta">
+              <div class="cfg-meta-row"><span>Sensor</span><strong>{% if tune_reference_pin != "None" %}GPIO {{ tune_reference_pin }}{% else %}Not Assigned{% endif %}</strong></div>
+              <div class="cfg-meta-row"><span>Home</span><strong>{% if tune_homed %}Homed{% else %}Unknown{% endif %}</strong></div>
+              <div class="cfg-meta-row"><span>Fault</span><strong>{% if tune_fault != "" %}{{ tune_fault }}{% else %}None{% endif %}</strong></div>
+            </div>
+            <p class="cfg-subtle">When a Tune fault is active, HV and Operate are blocked until the Tune reference state is valid again.</p>
+          </article>
+        </div>
+
         {% if enc %}
         <div class="cfg-grid-2" style="margin-top: 14px;">
           <article class="cfg-card">

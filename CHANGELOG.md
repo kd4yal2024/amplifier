@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-04-05
+
+### Unreleased local changes - deployment hardening pass after first field proof-of-concept
+
+### Runtime and hardware safety
+
+- Replaced panic-prone GPIO, MCP23017, INA228, encoder, and stepper init paths with descriptive `Result` errors through the runtime startup path
+- Added bounded shutdown checks for stepper and encoder workers so profile reloads and reconfiguration do not race stale worker threads
+- Added saturating position updates in stepper motion paths as a guard against overflow under fault conditions
+- Added TUNE reference sensor state, operator-visible fault reporting, and power-on interlocks so `HV` and `Oper` are blocked when Tune is unhomed or faulted
+- Removed detached-thread panic paths from band recall so missing motion channels or missing band memory now produce status messages instead of silent failures
+- Hardened power-control handlers so malformed form requests no longer panic on missing `value` fields
+- Kept the 10 ms SSE update cadence while making serialization fail soft instead of unwrapping
+
+### Profile safety and startup behavior
+
+- Switched profile saves to atomic temp-file writes followed by rename to reduce corruption risk during power loss or restart
+- Added explicit profile validation before load so malformed or partial JSON does not reach live state application
+- Made profile application return errors instead of assuming required keys are always present
+- Added startup fallback behavior that loads the first saved profile when no default profile is configured and reports clear status when no startup profile exists
+- Removed the remaining `default_profile` path unwrap so default-profile reads and writes now degrade or fail cleanly
+
+### Config and operator UX
+
+- Added typed form-parsing helpers for required and optional numeric inputs
+- Replaced silent CAT config coercion for `rig_model_id` and `rig_baud` with explicit validation errors
+- Added Tune reference sensor controls and safety status to the config page
+- Removed the panic-prone `Mcp::Default` implementation because MCP construction depends on live I2C hardware
+
+### Verification
+
+- Kept `cargo test --quiet` passing across the hardening passes
+- Kept `cargo build --quiet` passing after the deployment hardening changes
+
 ## 2026-03-14
 
 ### Unreleased local changes - Restore Tony-style power sequencing and band-follow behavior

@@ -2,8 +2,8 @@ pub mod encoder {
     use rppal::gpio::{Gpio, Level};
     use rppal::system::DeviceInfo;
     use std::sync::{
-        Arc, Mutex,
-        atomic::{AtomicI32, Ordering},
+        Arc,
+        atomic::{AtomicBool, AtomicI32, Ordering},
     };
     use std::thread;
     use std::time::Duration;
@@ -25,7 +25,8 @@ pub mod encoder {
     pub struct Encoder {
         pub pin_a: u8,
         pub pin_b: u8,
-        pub stop: Arc<Mutex<bool>>,
+        pub stop: Arc<AtomicBool>,
+        pub running: Arc<AtomicBool>,
         pub count: Arc<AtomicI32>,
     }
     impl Encoder {
@@ -33,30 +34,58 @@ pub mod encoder {
             Self {
                 pin_a: pina,
                 pin_b: pinb,
-                stop: Arc::new(Mutex::new(false)),
+                stop: Arc::new(AtomicBool::new(false)),
+                running: Arc::new(AtomicBool::new(false)),
                 count: Arc::new(AtomicI32::new(0)),
             }
         }
-        pub fn run(&mut self) -> Result<(), Box<::rppal::gpio::Error>> {
-            let device_info = DeviceInfo::new().unwrap();
+        pub fn run(&mut self) -> Result<(), String> {
+            let device_info = DeviceInfo::new()
+                .map_err(|e| format!("Encoder device info failed: {e}"))?;
             println!(
                 "Model: {} (SoC: {})",
                 device_info.model(),
                 device_info.soc()
             );
+            if self.running.swap(true, Ordering::Relaxed) {
+                return Ok(());
+            }
+            self.stop.store(false, Ordering::Relaxed);
             let master_count = Arc::clone(&self.count);
 
             let pin_a = self.pin_a;
             let pin_b = self.pin_b;
             let stop = self.stop.clone();
+            let running = self.running.clone();
             thread::spawn(move || {
-                let gpio = Gpio::new().unwrap();
-                let pin1 = gpio.get(pin_a).unwrap().into_input_pullup();
-                let pin2 = gpio.get(pin_b).unwrap().into_input_pullup();
+                let gpio = match Gpio::new() {
+                    Ok(gpio) => gpio,
+                    Err(err) => {
+                        eprintln!("Encoder GPIO init failed: {err}");
+                        running.store(false, Ordering::Relaxed);
+                        return;
+                    }
+                };
+                let pin1 = match gpio.get(pin_a) {
+                    Ok(pin) => pin.into_input_pullup(),
+                    Err(err) => {
+                        eprintln!("Encoder pin A init failed on GPIO {pin_a}: {err}");
+                        running.store(false, Ordering::Relaxed);
+                        return;
+                    }
+                };
+                let pin2 = match gpio.get(pin_b) {
+                    Ok(pin) => pin.into_input_pullup(),
+                    Err(err) => {
+                        eprintln!("Encoder pin B init failed on GPIO {pin_b}: {err}");
+                        running.store(false, Ordering::Relaxed);
+                        return;
+                    }
+                };
 
                 let mut last_clk_state = Level::High;
                 loop {
-                    if *stop.lock().unwrap() {
+                    if stop.load(Ordering::Relaxed) {
                         break;
                     }
                     let state = pin1.read();
@@ -81,6 +110,7 @@ pub mod encoder {
                     }
                     thread::sleep(Duration::from_micros(10));
                 }
+                running.store(false, Ordering::Relaxed);
             });
             /*
                         let mut  count = 0;
@@ -97,12 +127,20 @@ pub mod encoder {
         pub fn enc(&self) -> i32 {
             self.count.load(Ordering::Relaxed)
         }
+
+        pub fn stop(&self) {
+            self.stop.store(true, Ordering::Relaxed);
+        }
+
+        pub fn is_running(&self) -> bool {
+            self.running.load(Ordering::Relaxed)
+        }
     }
 }
 
 pub mod stepper {
     use std::sync::Mutex;
-    use std::sync::{Arc, mpsc::{self, Sender}, atomic::{AtomicI32, Ordering}};
+    use std::sync::{Arc, mpsc::{self, Sender}, atomic::{AtomicBool, AtomicI32, Ordering}};
     use rppal::gpio::Gpio;
     use std::collections::HashMap;
     use std::thread;
@@ -121,6 +159,7 @@ pub mod stepper {
         pub max: Arc<AtomicI32>,
         pub speed: Duration,
         pub operate: Arc<Mutex<bool>>,
+        pub running: Arc<AtomicBool>,
     }
     impl Stepper {
         pub fn new(name: &str) -> Self {
@@ -143,13 +182,22 @@ pub mod stepper {
                 max: Arc::new(AtomicI32::new(100000)),
                 speed: Duration::from_micros(100),
                 operate: Arc::new(Mutex::new(false)),
+                running: Arc::new(AtomicBool::new(false)),
             }
         }
-        pub fn run(&self, val: u32) {
+        pub fn run(&self, val: u32) -> Result<(), String> {
             let pos: u32 = self.pos.load(Ordering::Relaxed) as u32;
-            let gpio = Gpio::new().unwrap();
-            let mut pulse_pin = gpio.get(self.pin_a.unwrap()).unwrap().into_output();
-            let mut dir_pin = gpio.get(self.pin_b.unwrap()).unwrap().into_output();
+            let pin_a = self.pin_a.ok_or_else(|| format!("{} missing step pin", self.name))?;
+            let pin_b = self.pin_b.ok_or_else(|| format!("{} missing direction pin", self.name))?;
+            let gpio = Gpio::new().map_err(|e| format!("{} GPIO init failed: {e}", self.name))?;
+            let mut pulse_pin = gpio
+                .get(pin_a)
+                .map_err(|e| format!("{} pulse pin {pin_a} init failed: {e}", self.name))?
+                .into_output();
+            let mut dir_pin = gpio
+                .get(pin_b)
+                .map_err(|e| format!("{} direction pin {pin_b} init failed: {e}", self.name))?
+                .into_output();
             let mut count = 0;
             pulse_pin.set_low();
             if val > pos {
@@ -161,7 +209,7 @@ pub mod stepper {
                     pulse_pin.set_low();
                     thread::sleep(self.speed);
                     if count % 2 == 0 { 
-                        self.pos.fetch_add(1, Ordering::Relaxed);
+                        let _ = self.pos.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| Some(current.saturating_add(1)));
                     }
                 }
             } else if val < pos {
@@ -173,23 +221,37 @@ pub mod stepper {
                     pulse_pin.set_low();
                     thread::sleep(self.speed);
                     if count % 2 == 0 {
-                        self.pos.fetch_add(-1, Ordering::Relaxed); 
+                        let _ = self.pos.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| Some(current.saturating_sub(1)));
                     }
                 }
             }
+            Ok(())
         }
 
-        pub fn run_2(&mut self) {
+        pub fn run_2(&mut self) -> Result<(), String> {
             println!("Inside run 2");
+            if self.running.load(Ordering::Relaxed) {
+                return Ok(());
+            }
             let (tx, rx) = mpsc::channel();
             self.channel = Some(tx);
-            let gpio = Gpio::new().unwrap();
-            let mut pulse_pin = gpio.get(self.pin_a.unwrap()).unwrap().into_output();
-            let mut dir_pin = gpio.get(self.pin_b.unwrap()).unwrap().into_output();
+            let pin_a = self.pin_a.ok_or_else(|| format!("{} missing step pin", self.name))?;
+            let pin_b = self.pin_b.ok_or_else(|| format!("{} missing direction pin", self.name))?;
+            let gpio = Gpio::new().map_err(|e| format!("{} GPIO init failed: {e}", self.name))?;
+            let mut pulse_pin = gpio
+                .get(pin_a)
+                .map_err(|e| format!("{} pulse pin {pin_a} init failed: {e}", self.name))?
+                .into_output();
+            let mut dir_pin = gpio
+                .get(pin_b)
+                .map_err(|e| format!("{} direction pin {pin_b} init failed: {e}", self.name))?
+                .into_output();
             let mut count = 0;
             let pos = self.pos.clone();
             let speed = self.speed;
             let operate = self.operate.clone();
+            let running = self.running.clone();
+            running.store(true, Ordering::Relaxed);
             thread::spawn(move ||  {
                 loop{
                     if let Ok((val, stop))  = rx.recv() {
@@ -208,7 +270,7 @@ pub mod stepper {
                                 pulse_pin.set_low();
                                 thread::sleep(speed);
                                 if count % 2 == 0 { 
-                                    pos.fetch_add(1, Ordering::Relaxed);
+                                    let _ = pos.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| Some(current.saturating_add(1)));
                                 }
                             } 
                             *operate.lock().unwrap() = false;
@@ -222,7 +284,7 @@ pub mod stepper {
                                 pulse_pin.set_low();
                                 thread::sleep(speed);
                                 if count % 2 == 0 {
-                                    pos.fetch_add(-1, Ordering::Relaxed); 
+                                    let _ = pos.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| Some(current.saturating_sub(1)));
                                 }
                             }
                             *operate.lock().unwrap() = false;
@@ -230,13 +292,26 @@ pub mod stepper {
                         
                     }
                 }
+                *operate.lock().unwrap() = false;
+                running.store(false, Ordering::Relaxed);
             });
-            
+            Ok(())
+        }
+
+        pub fn stop(&mut self) {
+            if let Some(tx) = self.channel.clone() {
+                let _ = tx.send((self.pos.load(Ordering::Relaxed) as u32, true));
+            }
+            self.channel = None;
+        }
+
+        pub fn is_running(&self) -> bool {
+            self.running.load(Ordering::Relaxed)
         }
     }
 }
 pub mod mcp {
-    use std::{collections::HashMap, error::Error};
+    use std::collections::HashMap;
     //use linux_embedded_hal::I2cdev;
     use mcp230xx::{Direction, Mcp230xx, Mcp23017, Level};
     use rppal::{self, {i2c::I2c}};
@@ -278,15 +353,9 @@ pub mod mcp {
         pub message: String,
         pub switch: HashMap<String, String>
     }
-    impl Default for Mcp {
-        fn default() -> Self {
-            Self::new()
-        }
-    }
-
     impl Mcp {
         // default function that sets all pins as output.
-        pub fn new() -> Self {
+        pub fn new() -> Result<Self, String> {
             //let i2c= I2cdev::new("/dev/i2c-1").unwrap();
             let all_pins = [
                 Mcp23017::A0, Mcp23017::A1, Mcp23017::A2,
@@ -297,9 +366,9 @@ pub mod mcp {
                 Mcp23017::B7,
             ];
            
-            Self {
+            Ok(Self {
                 all_pins,
-                bus: Arc::new(Mutex::new(I2c::new().unwrap())),
+                bus: Arc::new(Mutex::new(I2c::new().map_err(|e| format!("I2C bus init failed: {e}"))?)),
                 pins: HashMap::from([
                     ("A0".to_string(), Mcp23017::A0),
                     ("A1".to_string(), Mcp23017::A1),
@@ -320,41 +389,50 @@ pub mod mcp {
                 ]),
                 message: String::from("MCP Intioalized ! ! !"),
                 switch: HashMap::new(),
-                }
+                })
                 
         }
-        pub fn init(&mut self){
+        pub fn init(&mut self) -> Result<(), String> {
             let i2c_mcp = MutexDevice::new(&self.bus).reverse();
-            let mut mcp: Mcp230xx<_, Mcp23017> = Mcp230xx::new(i2c_mcp, 0x20).unwrap();
+            let mut mcp: Mcp230xx<_, Mcp23017> =
+                Mcp230xx::new(i2c_mcp, 0x20).map_err(|e| format!("MCP23017 init failed: {e:?}"))?;
              for i in 0..=15 {
-                let pin = Mcp23017::try_from(i).unwrap();
+                let pin = Mcp23017::try_from(i).map_err(|_| format!("Invalid MCP pin index {i}"))?;
                 println!("{:?}", pin);
                 if mcp.set_direction(pin, Direction::Output).is_ok() {
                     println!("Pin: {:?} Configured as output", pin);
                 }
                 let _ = mcp.set_gpio(self.all_pins[i], Level::Low);
             }
+            Ok(())
         }
-        pub fn read_pin(&mut self, pin: Mcp23017)-> Result<Level, rppal::i2c::Error> {
+        pub fn read_pin(&mut self, pin: Mcp23017)-> Result<Level, String> {
             let i2c_mcp = MutexDevice::new(&self.bus).reverse();
-            let mut mcp: Mcp230xx<_, Mcp23017> = Mcp230xx::new(i2c_mcp, 0x20).unwrap();
-            mcp.gpio(pin)
+            let mut mcp: Mcp230xx<_, Mcp23017> =
+                Mcp230xx::new(i2c_mcp, 0x20).map_err(|e| format!("MCP23017 open failed: {e:?}"))?;
+            mcp.gpio(pin).map_err(|e| format!("MCP23017 read {pin:?} failed: {e:?}"))
         }
-        pub fn set_pin(&mut self, pin: Mcp23017, val: Level)-> Result<(), rppal::i2c::Error>{
+        pub fn set_pin(&mut self, pin: Mcp23017, val: Level)-> Result<(), String>{
             let i2c_mcp = MutexDevice::new(&self.bus).reverse();
-            let mut mcp: Mcp230xx<_, Mcp23017> = Mcp230xx::new(i2c_mcp, 0x20).unwrap();
-            mcp.set_gpio(pin, val)?;
+            let mut mcp: Mcp230xx<_, Mcp23017> =
+                Mcp230xx::new(i2c_mcp, 0x20).map_err(|e| format!("MCP23017 open failed: {e:?}"))?;
+            mcp.set_gpio(pin, val)
+                .map_err(|e| format!("MCP23017 write {pin:?} failed: {e:?}"))?;
             Ok(())
 
         }
-        pub fn read_val(self) -> Result<(f64, f64, f64), Box<dyn Error>>{
+        pub fn read_val(&self) -> Result<(f64, f64, f64), String> {
             let i2c_ina = MutexDevice::new(&self.bus);
             let delay = StdDelay;
             let mut ina: INA228Sync<StdDelay, I2cDeviceSync<MutexDevice<'_, _>, u8>> = INA228Sync::new_i2c(delay, i2c_ina, Address::A0A1(Pin::Gnd, Pin::Gnd));
-            ina.init(ElectricalResistance::new::<ohm>(0.015),
-                        ElectricCurrent::new::<ampere>(3.0),
-                        ).unwrap_or(());
-            let val = ina.measure()?;
+            ina.init(
+                ElectricalResistance::new::<ohm>(0.015),
+                ElectricCurrent::new::<ampere>(3.0),
+            )
+            .map_err(|e| format!("INA228 init failed: {e:?}"))?;
+            let val = ina
+                .measure()
+                .map_err(|e| format!("INA228 measurement failed: {e:?}"))?;
             let temp = val.temperature.get::<degree_celsius>();
             let current = val.current.get::<milliampere>();
             let voltage = val.bus_voltage.get::<volt>();
